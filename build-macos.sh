@@ -15,7 +15,6 @@ python3 -m venv .venv-macos
 .venv-macos/bin/python -m pip install -r requirements-build.txt
 .venv-macos/bin/python -m PyInstaller \
   --noconfirm --clean \
-  --target-arch "$target_arch" \
   --distpath dist-macos \
   --workpath build-macos \
   leadharbor-macos.spec

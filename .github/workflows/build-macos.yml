@@ -19,11 +19,9 @@ jobs:
           - name: Apple-Silicon
             runner: macos-15
             python_architecture: arm64
-            target_architecture: arm64
           - name: Intel
             runner: macos-15-intel
             python_architecture: x64
-            target_architecture: x86_64
 
     runs-on: ${{ matrix.runner }}
 
@@ -53,7 +51,6 @@ jobs:
           python -m PyInstaller \
             --noconfirm \
             --clean \
-            --target-arch "${{ matrix.target_architecture }}" \
             leadharbor-macos.spec
 
       - name: Apply ad-hoc signature

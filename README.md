@@ -139,6 +139,10 @@ native macOS packages. `Build macOS Demo` produces separate Apple Silicon and
 Intel artifacts on `macos-15` and `macos-15-intel`. Run it manually from the
 Actions page or push a tag beginning with `v`, such as `v0.1.0`.
 
+Each package is built natively on its matching runner. PyInstaller architecture
+flags are intentionally not passed alongside the `.spec` file because those
+make-spec options are not accepted when building from a spec configuration.
+
 The macOS packages use an ad-hoc signature for internal testing. They are not
 Apple-notarized, so the first launch may require Control-clicking the app and
 choosing **Open**. External distribution requires a Developer ID Application
