@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ t('companies_title') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div><p class="eyebrow">COMPANY DATABASE</p><h1>{{ t('company_database') }}</h1><p>{{ t('companies_description') }}</p></div>
+  <div class="heading-actions">
+    <a class="secondary-link import-database" href="{{ url_for('import_database') }}">↑ {{ t('import_database') }}</a>
+    <a class="secondary-link add-company" href="{{ url_for('create_company') }}">＋ {{ t('add_company') }}</a>
+    <a class="primary button-link" href="{{ url_for('export_companies', q=query, min_score=min_score, market=market) }}">{{ t('export_results') }} ↓</a>
+  </div>
+</section>
+
+<form class="filters" method="get">
+  <label>{{ t('search') }}<input name="q" value="{{ query }}" placeholder="{{ t('search_placeholder') }}"></label>
+  <label>{{ t('minimum_score') }}<input name="min_score" type="number" min="0" max="120" value="{{ min_score }}"></label>
+  <label>{{ t('market_filter') }}
+    <select name="market">
+      <option value="">{{ t('all_markets') }}</option>
+      {% for value in business_states %}<option value="{{ value }}" {% if market == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">{{ t('filter') }}</button>
+  <span>{{ t('table_results', count=companies|length) }}</span>
+</form>
+
+<form id="bulk-company-form" method="post" class="bulk-toolbar" data-bulk-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div><strong>{{ t('bulk_manage') }}</strong><span data-selected-count>{{ t('selected_count', count=0) }}</span></div>
+  <button type="submit" formaction="{{ url_for('bulk_export_companies') }}" data-bulk-action disabled>{{ t('export_selected') }}</button>
+  <button class="danger" type="submit" formaction="{{ url_for('bulk_delete_companies') }}" data-bulk-action data-confirm="{{ t('confirm_bulk_delete') }}" disabled>{{ t('delete_selected') }}</button>
+</form>
+
+<div class="table-scrollbar" data-table-scrollbar aria-label="{{ t('table_horizontal_scroll') }}" aria-controls="company-output-table" tabindex="0">
+  <div class="table-scrollbar-track" data-table-scrollbar-track></div>
+</div>
+<div class="table-wrap" data-table-scroll>
+  <table class="output-table" id="company-output-table">
+    <thead><tr><th>{{ t('column_company') }}</th><th>{{ t('column_market') }}</th><th>{{ t('column_address') }}</th><th>{{ t('column_type') }}</th><th>{{ t('column_first_name') }}</th><th>{{ t('column_last_name') }}</th><th>{{ t('column_contact') }}</th><th>{{ t('column_phone') }}</th><th>{{ t('column_signal') }}</th><th class="scale-column">{{ t('column_scale') }}</th><th class="score-column">{{ t('column_score') }}</th><th>{{ t('column_actions') }}</th><th class="select-column"><input type="checkbox" data-select-all aria-label="{{ t('select_all') }}"></th></tr></thead>
+    <tbody>
+      {% for company in companies %}
+      <tr>
+        <td><strong>{{ company.name }}</strong>{% if company.website %}<a href="{{ company.website }}" target="_blank" rel="noopener">{{ t('website') }} ↗</a>{% endif %}</td>
+        <td>{{ company.market or '—' }}</td>
+        <td>{{ company.address or '—' }}</td>
+        <td>{{ company_type_label(company.company_type) }}</td>
+        <td>{{ company.contact_first_name or '—' }}</td>
+        <td>{{ company.contact_last_name or '—' }}</td>
+        <td>{% if company.email %}<a href="mailto:{{ company.email }}">{{ company.email }}</a>{% else %}—{% endif %}</td>
+        <td>{{ company.phone or '—' }}</td>
+        <td>{{ company.signal or '—' }}</td>
+        <td class="scale-column">{{ company.scale or '—' }}</td>
+        <td class="score-column"><span class="score {% if company.score >= 90 %}high{% elif company.score >= 55 %}medium{% endif %}">{{ company.score }}</span></td>
+        <td class="row-actions">
+          <div class="row-actions-inner">
+            <a href="{{ url_for('edit_company', company_id=company.id) }}">{{ t('edit') }}</a>
+            <form method="post" action="{{ url_for('delete_company', company_id=company.id) }}" onsubmit="return confirm('{{ t('confirm_delete_company') }}')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit">{{ t('delete') }}</button>
+            </form>
+          </div>
+        </td>
+        <td class="select-column"><input form="bulk-company-form" type="checkbox" name="company_ids" value="{{ company.id }}" data-company-select aria-label="{{ company.name }}"></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="13"><div class="empty"><p>{{ t('no_companies') }}</p></div></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

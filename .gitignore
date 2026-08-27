@@ -1,0 +1,49 @@
+# Python environments and caches
+.venv/
+.venv-*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build products
+build/
+build-*/
+dist/
+dist-*/
+*.spec.bak
+
+# Local application data and test databases
+data/
+packaged-test-data/
+ui-test-data/
+ui-association-test/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Leads, imports, exports, and delivery packages
+*.csv
+*.xlsx
+*.xls
+exports/
+delivery/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets*.json
+credentials*.json
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ t('database_preview_title') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading">
+  <div>
+    <p class="eyebrow">DATABASE COMPARISON</p>
+    <h1>{{ t('database_preview_title') }}</h1>
+    <p>{{ t('database_preview_description', filename=batch.filename) }}</p>
+  </div>
+  <a class="secondary-link" href="{{ url_for('companies') }}">← {{ t('cancel') }}</a>
+</section>
+
+<section class="import-stats">
+  <article><strong>{{ batch.total_count }}</strong><span>{{ t('import_total') }}</span></article>
+  <article class="new"><strong>{{ batch.new_count }}</strong><span>{{ t('import_new') }}</span></article>
+  <article class="duplicate"><strong>{{ batch.duplicate_count }}</strong><span>{{ t('import_duplicates') }}</span></article>
+  <article class="missing"><strong>{{ batch.missing_count }}</strong><span>{{ t('import_with_missing') }}</span></article>
+</section>
+
+<div class="table-wrap database-preview-wrap">
+  <table class="database-preview-table">
+    <thead><tr><th>{{ t('import_status') }}</th><th>{{ t('column_company') }}</th><th>{{ t('column_market') }}</th><th>{{ t('column_contact') }}</th><th>{{ t('column_phone') }}</th><th>{{ t('missing_information') }}</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr class="import-row {{ row.row_status }}">
+        <td>
+          <span class="import-status {{ row.row_status }}">{{ t('status_import_' ~ row.row_status) }}</span>
+          {% if row.duplicate_reason %}<small>{{ t('duplicate_by_' ~ row.duplicate_reason) }}{% if row.matched_company_name %}：{{ row.matched_company_name }}{% endif %}</small>{% endif %}
+        </td>
+        <td><strong>{{ row.name }}</strong>{% if row.website %}<a href="{{ row.website }}" target="_blank" rel="noopener">{{ row.website }}</a>{% endif %}</td>
+        <td>{{ row.market or '—' }}</td>
+        <td>{{ row.email or '—' }}</td>
+        <td>{{ row.phone or '—' }}</td>
+        <td class="missing-cell">
+          {% if row.missing_fields %}
+            {% for field in row.missing_fields.split(',') %}<span>{{ import_field_label(field) }}</span>{% endfor %}
+          {% else %}<em>{{ t('information_complete') }}</em>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<form method="post" action="{{ url_for('confirm_database_import', batch_id=batch.id) }}" class="panel database-import-confirm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div><strong>{{ t('confirm_database_import') }}</strong><small>{{ t('confirm_database_import_hint') }}</small></div>
+  <button class="primary" type="submit">{{ t('confirm_import_records', count=batch.total_count) }} <span>→</span></button>
+</form>
+{% endblock %}

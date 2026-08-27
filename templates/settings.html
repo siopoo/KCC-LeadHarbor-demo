@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ t('settings_title') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading settings-heading">
+  <div>
+    <p class="eyebrow">APPLICATION SETTINGS</p>
+    <h1>{{ t('settings_title') }}</h1>
+    <p>{{ t('settings_description') }}</p>
+  </div>
+</section>
+
+<section class="settings-grid">
+  <article class="panel settings-card">
+    <div class="settings-card-heading">
+      <div><span class="api-mark">B</span><div><h2>Brave Search API</h2><p>{{ t('brave_api_description') }}</p></div></div>
+      <span class="api-status {{ 'configured' if brave_configured else 'not-configured' }}">{{ t('configured') if brave_configured else t('not_configured') }}</span>
+    </div>
+    {% if brave_configured %}
+    <div class="configured-key"><span>{{ t('current_key') }}</span><strong>{{ brave_masked }}</strong>{% if brave_from_environment %}<small>{{ t('from_environment') }}</small>{% endif %}</div>
+    {% endif %}
+    <form method="post" class="task-form api-settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>{{ t('api_key') }}
+        <input name="brave_api_key" type="password" maxlength="500" autocomplete="new-password" placeholder="{{ t('api_key_placeholder') }}">
+        <small class="field-hint">{{ t('api_key_local_hint') }}</small>
+      </label>
+      {% if brave_configured %}<label class="check remove-key"><input type="checkbox" name="remove_brave_key"><span>{{ t('remove_api_key') }}</span></label>{% endif %}
+      <button class="primary" type="submit">{{ t('save_api_settings') }} <span>→</span></button>
+    </form>
+  </article>
+
+  <article class="panel settings-card map-settings-card">
+    <div class="settings-card-heading">
+      <div><span class="api-mark osm">OSM</span><div><h2>OpenStreetMap</h2><p>{{ t('osm_description') }}</p></div></div>
+      <span class="api-status configured">{{ t('ready') }}</span>
+    </div>
+    <div class="no-key-note"><strong>{{ t('no_api_key_needed') }}</strong><span>{{ t('osm_ready_hint') }}</span></div>
+  </article>
+
+  <article class="panel settings-card scoring-settings-card" id="scoring-rules">
+    <div class="settings-card-heading">
+      <div><span class="api-mark scoring">120</span><div><h2>{{ t('scoring_settings_title') }}</h2><p>{{ t('scoring_settings_description') }}</p></div></div>
+      <span class="api-status configured">{{ t('total_points', total=scoring_total) }}</span>
+    </div>
+    <form method="post" class="scoring-settings-form" data-scoring-form data-required-total="{{ scoring_total }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="settings_section" value="scoring">
+      <div class="scoring-rule-list">
+        {% for key in ['icp_business_type', 'cabinet_relevance', 'active_opportunity', 'scale_potential', 'contactability', 'region_match', 'association_membership', 'office_assignment'] %}
+        <label>
+          <span><strong>{{ t('scoring_rule_' + key) }}</strong><small>{{ t('scoring_hint_' + key) }}</small></span>
+          <span class="points-input"><input name="score_{{ key }}" type="number" min="0" max="120" step="1" value="{{ scoring_weights[key] }}" required data-scoring-weight><em>{{ t('points') }}</em></span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="scoring-total" data-scoring-total-row>
+        <span>{{ t('current_total') }}</span>
+        <strong><output data-scoring-total>{{ scoring_total }}</output> / {{ scoring_total }}</strong>
+      </div>
+      <p class="scoring-warning" data-scoring-warning hidden>{{ t('scoring_total_warning', total=scoring_total) }}</p>
+      <div class="scoring-actions">
+        <button class="primary" type="submit" data-scoring-save>{{ t('save_scoring_rules') }} <span>→</span></button>
+        <button class="reset-scoring" type="submit" name="reset_scoring" value="1">{{ t('restore_default_scoring') }}</button>
+      </div>
+    </form>
+  </article>
+</section>
+{% endblock %}

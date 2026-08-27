@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ t('import_database') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading">
+  <div>
+    <p class="eyebrow">EXISTING DATABASE</p>
+    <h1>{{ t('import_database') }}</h1>
+    <p>{{ t('import_database_description') }}</p>
+  </div>
+  <a class="secondary-link" href="{{ url_for('companies') }}">← {{ t('back_to_companies') }}</a>
+</section>
+
+<form method="post" enctype="multipart/form-data" class="panel database-import-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>{{ t('database_file') }}
+    <input name="database_file" type="file" accept=".csv,.xlsx,.db,.sqlite,.sqlite3,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.sqlite3" required>
+  </label>
+  <p>{{ t('database_file_hint') }} <a href="{{ url_for('association_template') }}">{{ t('download_csv_template') }}</a></p>
+  <div class="import-behavior">
+    <span>1</span><div><strong>{{ t('preview_duplicates') }}</strong><small>{{ t('preview_duplicates_hint') }}</small></div>
+    <span>2</span><div><strong>{{ t('mark_missing') }}</strong><small>{{ t('mark_missing_hint') }}</small></div>
+    <span>3</span><div><strong>{{ t('safe_merge') }}</strong><small>{{ t('safe_merge_hint') }}</small></div>
+  </div>
+  <button class="primary" type="submit">{{ t('analyze_database') }} <span>→</span></button>
+</form>
+{% endblock %}

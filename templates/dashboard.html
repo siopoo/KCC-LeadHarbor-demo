@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}{{ t('tasks_title') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">LOCAL B2B DISCOVERY</p>
+    <h1>{{ t('hero_line_1') }}<br>{{ t('hero_line_2') }}</h1>
+    <p class="lead">{{ t('hero_description') }}</p>
+  </div>
+  <div class="hero-note"><span></span>{{ t('local_data') }}</div>
+</section>
+
+<section class="stats" aria-label="{{ t('stats_aria') }}">
+  <article><span>{{ t('total_companies') }}</span><strong>{{ stats.total }}</strong></article>
+  <article><span>{{ t('contactable_companies') }}</span><strong>{{ stats.contactable }}</strong></article>
+  <article><span>{{ t('with_websites') }}</span><strong>{{ stats.websites }}</strong></article>
+  <article><span>{{ t('running_tasks') }}</span><strong>{{ stats.running }}</strong></article>
+</section>
+
+<section class="grid-main discovery-grid">
+  <div class="discovery-tabs" role="tablist" aria-label="{{ t('discovery_method') }}" data-discovery-tabs>
+    <button type="button" role="tab" aria-selected="true" aria-controls="keyword-discovery-pane" data-discovery-tab="keyword" class="active"><span>01</span><strong>{{ t('keyword_map') }}</strong><small>{{ t('keyword_tab_hint') }}</small></button>
+    <button type="button" role="tab" aria-selected="false" aria-controls="association-discovery-pane" data-discovery-tab="association"><span>02</span><strong>{{ t('association_bulk') }}</strong><small>{{ t('association_tab_hint') }}</small></button>
+  </div>
+
+  <article class="panel task-form-panel discovery-pane keyword-pane" id="keyword-discovery-pane" role="tabpanel" data-discovery-pane="keyword">
+    <div class="panel-heading">
+      <div><p class="eyebrow">KEYWORD + MAP</p><h2>{{ t('keyword_map') }}</h2></div>
+      <span class="step">01</span>
+    </div>
+    <p class="source-note">{{ t('keyword_note') }}</p>
+    <div class="source-state {{ 'ready' if search_ready else 'waiting' }}">
+      <i></i>{{ t('search_engine') }}：{{ t('configured') if search_ready else t('map_only') }}
+    </div>
+    <form method="post" action="{{ url_for('create_keyword_task') }}" class="task-form">
+      <label class="discovery-field">{{ t('target_keyword') }}<input name="keyword" required placeholder="{{ t('keyword_placeholder') }}"><small class="field-hint">{{ t('keyword_hint') }}</small></label>
+      <label class="discovery-field">{{ t('country_region') }}
+        <span class="state-picker-wrap"><input name="location" list="business-states" required autocomplete="off" data-state-picker data-invalid-message="{{ t('invalid_location_message') }}" placeholder="{{ t('location_placeholder') }}"></span>
+        <datalist id="business-states">
+          {% for state in business_states %}<option value="{{ state }}"></option>{% endfor %}
+        </datalist>
+        <small class="field-hint">{{ t('location_hint') }}</small>
+      </label>
+      <label>{{ t('result_limit') }}<input name="limit" type="number" min="1" max="500" value="50"></label>
+      <label class="check"><input type="checkbox" name="crawl_websites" checked><span>{{ t('crawl_contact') }}</span></label>
+      <button class="primary" type="submit">{{ t('start_keyword') }} <span>→</span></button>
+    </form>
+  </article>
+
+  <article class="panel task-form-panel association-panel discovery-pane" id="association-discovery-pane" role="tabpanel" data-discovery-pane="association" hidden>
+    <div class="panel-heading">
+      <div><p class="eyebrow">ASSOCIATION IMPORT</p><h2>{{ t('association_bulk') }}</h2></div>
+      <span class="step">02</span>
+    </div>
+    <p class="source-note">{{ t('association_note') }}</p>
+    <form method="post" action="{{ url_for('preview_association_pdf') }}" enctype="multipart/form-data" class="task-form association-upload-form pdf-import-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>{{ t('association_source') }}
+        <select data-association-source>
+          <option value="">{{ t('custom_association') }}</option>
+          {% for source in association_sources %}
+          <option value="{{ source.key }}" data-name="{{ source.label }}" data-url="{{ source.url }}">{{ source.label }}</option>
+          {% endfor %}
+        </select>
+        <small class="field-hint">{{ t('association_source_hint') }}</small>
+      </label>
+      <label>{{ t('association_name') }}<input name="association_name" data-association-name required maxlength="200" placeholder="{{ t('association_name_placeholder') }}"></label>
+      <label>{{ t('official_pdf_url') }}<input name="pdf_url" data-association-url type="url" placeholder="https://association.org/member-directory.pdf"></label>
+      <div class="pdf-source-separator"><span>{{ t('or_upload_pdf') }}</span></div>
+      <label>{{ t('association_pdf_file') }}<input name="association_pdf" type="file" accept=".pdf,application/pdf"></label>
+      <p class="upload-hint">{{ t('association_pdf_hint') }}</p>
+      <button class="secondary-upload" type="submit">{{ t('parse_pdf_preview') }} <span>→</span></button>
+    </form>
+    <div class="association-divider"><span>{{ t('or_import_csv') }}</span></div>
+    <form method="post" action="{{ url_for('upload_association_task') }}" enctype="multipart/form-data" class="task-form association-upload-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>{{ t('association_csv') }}<input name="association_csv" type="file" accept=".csv,text/csv" required></label>
+      <p class="upload-hint">{{ t('association_csv_hint') }} <a href="{{ url_for('association_template') }}">{{ t('download_csv_template') }}</a></p>
+      <label class="check"><input type="checkbox" name="crawl_websites"><span>{{ t('crawl_more') }}</span></label>
+      <button class="secondary-upload" type="submit">{{ t('import_other_association') }} <span>↑</span></button>
+    </form>
+  </article>
+
+  <article class="panel task-list-panel recent-panel">
+    <div class="panel-heading">
+      <div><p class="eyebrow">RECENT ACTIVITY</p><h2>{{ t('recent_tasks') }}</h2></div>
+      <span class="step">03</span>
+    </div>
+    <div class="task-list" data-task-list>
+      {% for task in tasks %}
+      <div class="task-item" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+        <div class="task-status {{ task.status }}"><i></i>{{ status_label(task.status) }}</div>
+        <strong>{{ task_title(task) }}</strong>
+        <span>{{ task.location }} · {{ source_label(task.source) }}</span>
+        <small>#{{ task.id }} · {{ t('result_count', count=task.result_count) }}</small>
+        {% if task.error_message %}<p class="task-error">{{ t('interrupted_hint') if task.status == 'interrupted' else task.error_message }}</p>{% endif %}
+        {% if task.status not in ['queued', 'running'] %}
+        <form method="post" action="{{ url_for('delete_task', task_id=task.id) }}" class="task-delete" onsubmit="return confirm('{{ t('confirm_delete_task') }}')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">{{ t('delete_history') }}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="empty"><span>⌁</span><p>{{ t('no_tasks') }}</p><small>{{ t('no_tasks_hint') }}</small></div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

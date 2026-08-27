@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pdf_preview_title') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading preview-heading">
+  <div>
+    <p class="eyebrow">PDF IMPORT PREVIEW</p>
+    <h1>{{ t('pdf_preview_title') }}</h1>
+    <p>{{ t('pdf_preview_description', association=association_name, count=total_count) }}</p>
+  </div>
+  <a class="secondary-link" href="{{ url_for('dashboard') }}">← {{ t('cancel') }}</a>
+</section>
+
+<div class="preview-summary">
+  <strong>{{ total_count }}</strong>
+  <span>{{ t('members_recognized') }}</span>
+  {% if total_count > leads|length %}<small>{{ t('preview_first_rows', count=leads|length) }}</small>{% endif %}
+</div>
+
+<div class="table-wrap preview-table-wrap">
+  <table class="pdf-preview-table">
+    <thead><tr><th>{{ t('column_company') }}</th><th>{{ t('column_market') }}</th><th>{{ t('column_first_name') }}</th><th>{{ t('column_last_name') }}</th><th>{{ t('column_contact') }}</th><th>{{ t('column_phone') }}</th><th>{{ t('field_website') }}</th></tr></thead>
+    <tbody>
+      {% for lead in leads %}
+      <tr>
+        <td><strong>{{ lead.name }}</strong></td>
+        <td>{{ lead.market or '—' }}</td>
+        <td>{{ lead.contact_first_name or '—' }}</td>
+        <td>{{ lead.contact_last_name or '—' }}</td>
+        <td>{{ lead.email or '—' }}</td>
+        <td>{{ lead.phone or '—' }}</td>
+        <td>{% if lead.website %}<a href="{{ lead.website }}" target="_blank" rel="noopener">{{ lead.website }}</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<form method="post" action="{{ url_for('confirm_association_pdf', preview_id=preview_id) }}" class="preview-confirm panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label class="check"><input type="checkbox" name="crawl_websites"><span>{{ t('crawl_more') }}</span></label>
+  <button class="primary" type="submit">{{ t('confirm_import_all', count=total_count) }} <span>→</span></button>
+  <a class="cancel-button" href="{{ url_for('dashboard') }}">{{ t('cancel') }}</a>
+</form>
+{% endblock %}

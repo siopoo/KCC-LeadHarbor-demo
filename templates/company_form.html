@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ t('add_company') if mode == 'create' else t('edit_company') }} · KCC LeadHarbor{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading">
+  <div>
+    <p class="eyebrow">COMPANY RECORD</p>
+    <h1>{{ t('add_company') if mode == 'create' else t('edit_company') }}</h1>
+    <p>{{ t('company_form_description') }}</p>
+  </div>
+  <a class="secondary-link" href="{{ url_for('companies') }}">← {{ t('back_to_companies') }}</a>
+</section>
+
+<form method="post" class="panel company-editor">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="editor-grid">
+    <label class="wide">{{ t('field_company_name') }} *<input name="name" required maxlength="200" value="{{ company.name or '' }}"></label>
+    <label>{{ t('field_market') }}
+      <select name="market">
+        <option value="">—</option>
+        {% for value in ['Florida', 'Illinois', 'Indiana', 'Iowa', 'Louisiana', 'Michigan', 'Minnesota', 'Mississippi', 'Ohio', 'Texas', 'Wisconsin'] %}
+        <option value="{{ value }}" {% if company.market == value %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t('field_company_type') }}
+      <select name="company_type">
+        {% for value in ['Contractor', 'Builder', 'Remodeler', 'Dealer', 'Multifamily', 'Other'] %}
+        <option value="{{ value }}" {% if (company.company_type or 'Other') == value %}selected{% endif %}>{{ company_type_label(value) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t('field_first_name') }}<input name="contact_first_name" maxlength="100" value="{{ company.contact_first_name or '' }}"></label>
+    <label>{{ t('field_last_name') }}<input name="contact_last_name" maxlength="100" value="{{ company.contact_last_name or '' }}"></label>
+    <label>{{ t('field_email') }}<input name="email" type="email" maxlength="500" value="{{ company.email or '' }}"></label>
+    <label>{{ t('field_phone') }}<input name="phone" maxlength="500" value="{{ company.phone or '' }}"></label>
+    <label class="wide">{{ t('field_website') }}<input name="website" type="url" maxlength="500" value="{{ company.website or '' }}" placeholder="https://example.com"></label>
+    <label class="wide">{{ t('field_address') }}<input name="address" maxlength="500" value="{{ company.address or '' }}"></label>
+    <label>{{ t('field_signal') }}<input name="signal" maxlength="500" value="{{ company.signal or '' }}"></label>
+    <label>{{ t('field_scale') }}<input name="scale" maxlength="200" value="{{ company.scale or '' }}"></label>
+    <label>{{ t('field_score') }}<input name="score" type="number" min="0" max="120" value="{{ company.score or 0 }}"></label>
+  </div>
+  <div class="editor-actions">
+    <button class="primary save-button" type="submit">{{ t('create_company') if mode == 'create' else t('save_changes') }} <span>→</span></button>
+    <a class="cancel-button" href="{{ url_for('companies') }}">{{ t('cancel') }}</a>
+  </div>
+</form>
+
+{% if mode == 'edit' %}
+<form method="post" action="{{ url_for('delete_company', company_id=company.id) }}" class="danger-zone" onsubmit="return confirm('{{ t('confirm_delete_company') }}')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div><strong>{{ t('delete_company') }}</strong><span>{{ t('delete_company_hint') }}</span></div>
+  <button type="submit">{{ t('delete_company') }}</button>
+</form>
+{% endif %}
+{% endblock %}

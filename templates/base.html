@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="{{ current_language }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ t('meta_description') }}">
+  <title>{% block title %}KCC LeadHarbor{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='database-import.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='association-library.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="brand-mark">KCC</span>
+      <span><strong>LeadHarbor</strong><small>Local intelligence workspace</small></span>
+    </a>
+    <div class="topbar-actions">
+      <nav aria-label="{{ t('nav_aria') }}">
+        <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">{{ t('nav_tasks') }}</a>
+        <a href="{{ url_for('companies') }}" class="{% if request.endpoint == 'companies' %}active{% endif %}">{{ t('nav_companies') }}</a>
+        <a href="{{ url_for('settings') }}" class="{% if request.endpoint == 'settings' %}active{% endif %}">{{ t('nav_settings') }}</a>
+      </nav>
+      <div class="language-switcher" aria-label="{{ t('language_aria') }}">
+        {% for code, label in languages.items() %}
+        <a href="{{ url_for('set_language', code=code, next=request.full_path) }}" lang="{{ code }}" class="{% if current_language == code %}active{% endif %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+  <main class="shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
