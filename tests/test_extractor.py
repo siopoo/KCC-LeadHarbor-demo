@@ -4,7 +4,7 @@ import unittest
 
 from leadharbor.extractor import extract_page, merge_page_data
 from leadharbor.models import Lead
-from leadharbor.scoring import score_breakdown, score_lead
+from leadharbor.scoring import score_breakdown, score_details, score_lead
 from leadharbor.sources import OpenStreetMapSource
 
 
@@ -61,6 +61,20 @@ class ExtractorTests(unittest.TestCase):
             email="sales@gmail.com", phone="555-0100",
         )
         self.assertEqual(score_breakdown(lead)["contactability"], 4)
+
+    def test_score_details_explain_points_with_supporting_evidence(self) -> None:
+        lead = Lead(
+            name="Texas Cabinet Builders", market="Austin, TX", company_type="Builder",
+            website="https://cabinet.example", email="sales@cabinet.example, team@gmail.com",
+            phone="512-555-0100", signal="Recent permit for a new community",
+            scale="180 homes", source="RCA association member directory",
+        )
+        details = score_details(lead)
+        self.assertEqual(details["icp_business_type"]["points"], 25)
+        self.assertIn("Builder", details["icp_business_type"]["evidence"])
+        self.assertIn("sales@cabinet.example", details["contactability"]["evidence"])
+        self.assertNotIn("team@gmail.com", details["contactability"]["evidence"])
+        self.assertEqual(details["office_assignment"]["evidence"], ["KCC"])
 
     def test_office_bonus_only_applies_to_assigned_locations(self) -> None:
         assigned = Lead(name="Builder", market="Madison, WI", company_type="Builder")

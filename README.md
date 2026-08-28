@@ -97,6 +97,12 @@ record before import:
 Both English and Chinese column headings are accepted, including the headings
 used by the built-in CSV export.
 
+Each company row can expand to show its full scoring breakdown, the evidence
+that triggered every rule, discovery sources, source URLs, matched keywords,
+and the latest collection time. Repeated discoveries merge their provenance
+instead of overwriting earlier sources. CSV exports include the same score
+breakdown and provenance fields for offline review.
+
 Build the Windows desktop executable:
 
 ```powershell

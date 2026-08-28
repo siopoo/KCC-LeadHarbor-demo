@@ -8,6 +8,7 @@ import os
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 
@@ -22,7 +23,7 @@ from leadharbor.models import Lead
 from leadharbor.net import domain_key, normalize_url
 from leadharbor.pipeline import LeadPipeline
 from leadharbor.search import BraveSearchSource
-from leadharbor.scoring import DEFAULT_SCORING_WEIGHTS, SCORING_TOTAL, score_lead
+from leadharbor.scoring import DEFAULT_SCORING_WEIGHTS, SCORING_TOTAL, score_details, score_lead
 from leadharbor.sources import OpenStreetMapSource
 from leadharbor.storage import app_data_dir, resource_path
 
@@ -39,6 +40,61 @@ BRAVE_API_SETTING = "brave_search_api_key"
 
 def brave_api_key(db: Database) -> str:
     return db.get_setting(BRAVE_API_SETTING).strip() or os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+
+
+def company_with_evidence(
+    company: dict[str, object], weights: dict[str, int],
+) -> dict[str, object]:
+    """Add display-only score details and safe discovery links to a company row."""
+    item = dict(company)
+    lead = Lead(
+        name=str(item.get("name", "")), market=str(item.get("market", "")),
+        company_type=str(item.get("company_type", "")),
+        contact_first_name=str(item.get("contact_first_name", "")),
+        contact_last_name=str(item.get("contact_last_name", "")),
+        website=str(item.get("website", "")), email=str(item.get("email", "")),
+        phone=str(item.get("phone", "")), address=str(item.get("address", "")),
+        country=str(item.get("country", "")), category=str(item.get("category", "")),
+        description=str(item.get("description", "")), source=str(item.get("source", "")),
+        source_url=str(item.get("source_url", "")), signal=str(item.get("signal", "")),
+        scale=str(item.get("scale", "")),
+    )
+    details = score_details(lead, weights)
+    item["score_details"] = [
+        {
+            "key": key,
+            **detail,
+            "percent": min(
+                100,
+                round(int(detail["points"]) * 100 / int(detail["max_points"]))
+                if int(detail["max_points"]) else 0,
+            ),
+        }
+        for key, detail in details.items()
+    ]
+    automatic_score = sum(int(detail["points"]) for detail in details.values())
+    item["automatic_score"] = automatic_score
+    item["score_differs"] = int(item.get("score", 0)) != automatic_score
+
+    source_names: list[str] = []
+    for value in str(item.get("source", "")).split(" | "):
+        cleaned = value.strip()
+        if cleaned and cleaned not in source_names:
+            source_names.append(cleaned)
+    item["source_names"] = source_names
+
+    source_links: list[dict[str, str]] = []
+    candidates = [*str(item.get("source_url", "")).split(" | ")]
+    if item.get("website"):
+        candidates.append(str(item["website"]))
+    for candidate in candidates:
+        url = normalize_url(candidate)
+        if not url or any(link["url"] == url for link in source_links):
+            continue
+        host = (urlparse(url).hostname or url).removeprefix("www.")
+        source_links.append({"url": url, "label": host})
+    item["source_links"] = source_links
+    return item
 
 
 def create_app(database_path: Path | None = None) -> Flask:
@@ -124,17 +180,27 @@ def create_app(database_path: Path | None = None) -> Flask:
         fields = [
             "Company", "Market", "Address", "Type", "Contact First Name", "Contact Last Name",
             "Contact Info", "Phone Number (if available)", "Signal", "Scale", "Score",
+            "Score Breakdown", "Source", "Source URL", "Matched Keywords", "Updated At",
         ]
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
+        weights = app.config["DATABASE"].get_scoring_weights()
         for row in rows:
+            enriched = company_with_evidence(row, weights)
+            breakdown = "; ".join(
+                f"{detail['key']}: {detail['points']}/{detail['max_points']}"
+                for detail in enriched["score_details"]
+            )
             writer.writerow({
                 "Company": row["name"], "Market": row["market"], "Address": row["address"],
                 "Type": row["company_type"], "Contact First Name": row["contact_first_name"],
                 "Contact Last Name": row["contact_last_name"], "Contact Info": row["email"],
                 "Phone Number (if available)": row["phone"], "Signal": row["signal"],
-                "Scale": row["scale"], "Score": row["score"],
+                "Scale": row["scale"], "Score": row["score"], "Score Breakdown": breakdown,
+                "Source": row.get("source", ""), "Source URL": row.get("source_url", ""),
+                "Matched Keywords": row.get("matched_keywords", ""),
+                "Updated At": row.get("updated_at", ""),
             })
         return Response(
             "\ufeff" + output.getvalue(),
@@ -408,9 +474,11 @@ def create_app(database_path: Path | None = None) -> Flask:
         except ValueError:
             min_score = 0
         db: Database = app.config["DATABASE"]
+        rows = db.list_companies(query=query, min_score=min_score, market=market)
+        weights = db.get_scoring_weights()
         return render_template(
             "companies.html",
-            companies=db.list_companies(query=query, min_score=min_score, market=market),
+            companies=[company_with_evidence(company, weights) for company in rows],
             query=query,
             min_score=min_score,
             market=market,

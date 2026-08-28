@@ -51,6 +51,7 @@ ASSOCIATION_MEMBER = re.compile(
     re.I,
 )
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EMAIL_IN_TEXT = re.compile(r"[^\s,;@]+@[^\s,;@]+\.[^\s,;@]+")
 PUBLIC_EMAIL_DOMAINS = {
     "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com",
 }
@@ -77,11 +78,27 @@ def _approved_region(lead: Lead) -> bool:
     return any(re.search(rf"(?:^|[,\s]){code}(?:$|[,\s])", location) for code in APPROVED_REGIONS)
 
 
-def _business_email(email: str) -> bool:
-    value = email.strip().casefold()
-    if not EMAIL.match(value):
-        return False
-    return value.rsplit("@", 1)[-1] not in PUBLIC_EMAIL_DOMAINS
+def _business_emails(email: str) -> list[str]:
+    values: list[str] = []
+    for match in EMAIL_IN_TEXT.findall(email or ""):
+        value = match.strip().casefold()
+        if EMAIL.match(value) and value.rsplit("@", 1)[-1] not in PUBLIC_EMAIL_DOMAINS:
+            if value not in values:
+                values.append(value)
+    return values
+
+
+def _evidence(*values: str) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", value or "").strip(" ,;|")
+        if cleaned and cleaned.casefold() not in {item.casefold() for item in result}:
+            result.append(cleaned[:220])
+    return result
+
+
+def _pattern_evidence(pattern: re.Pattern[str], text: str) -> list[str]:
+    return _evidence(*(match.group(0) for match in list(pattern.finditer(text))[:3]))
 
 
 def validate_scoring_weights(values: dict[str, object]) -> dict[str, int]:
@@ -98,29 +115,77 @@ def validate_scoring_weights(values: dict[str, object]) -> dict[str, int]:
     return weights
 
 
-def score_breakdown(lead: Lead, weights: dict[str, int] | None = None) -> dict[str, int]:
-    """Return KCC's 100-point ICP score plus the 20-point Office bonus."""
+def score_details(
+    lead: Lead, weights: dict[str, int] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Return each rule's points, maximum points, and supporting evidence."""
     weights = validate_scoring_weights(weights or DEFAULT_SCORING_WEIGHTS)
     text = _all_text(lead)
+    business_emails = _business_emails(lead.email)
     contact_score = 0
     if lead.website:
         contact_score += 2
-    if _business_email(lead.email):
+    if business_emails:
         contact_score += 3
     if lead.phone:
         contact_score += 2
     if lead.contact_first_name and lead.contact_last_name:
         contact_score += 3
 
-    return {
-        "icp_business_type": weights["icp_business_type"] if ICP_TYPE.search(text) else 0,
-        "cabinet_relevance": weights["cabinet_relevance"] if CABINET_RELEVANCE.search(text) else 0,
-        "active_opportunity": weights["active_opportunity"] if (lead.signal.strip() or ACTIVE_SIGNAL.search(text)) else 0,
-        "scale_potential": weights["scale_potential"] if (lead.scale.strip() or SCALE_POTENTIAL.search(text)) else 0,
+    icp_match = bool(ICP_TYPE.search(text))
+    cabinet_match = bool(CABINET_RELEVANCE.search(text))
+    active_match = bool(lead.signal.strip() or ACTIVE_SIGNAL.search(text))
+    scale_match = bool(lead.scale.strip() or SCALE_POTENTIAL.search(text))
+    region_match = _approved_region(lead)
+    association_match = bool(ASSOCIATION_MEMBER.search(text))
+    office = lead.office or infer_office(lead)
+
+    points = {
+        "icp_business_type": weights["icp_business_type"] if icp_match else 0,
+        "cabinet_relevance": weights["cabinet_relevance"] if cabinet_match else 0,
+        "active_opportunity": weights["active_opportunity"] if active_match else 0,
+        "scale_potential": weights["scale_potential"] if scale_match else 0,
         "contactability": round(contact_score * weights["contactability"] / 10),
-        "region_match": weights["region_match"] if _approved_region(lead) else 0,
-        "association_membership": weights["association_membership"] if ASSOCIATION_MEMBER.search(text) else 0,
-        "office_assignment": weights["office_assignment"] if (lead.office or infer_office(lead)) else 0,
+        "region_match": weights["region_match"] if region_match else 0,
+        "association_membership": weights["association_membership"] if association_match else 0,
+        "office_assignment": weights["office_assignment"] if office else 0,
+    }
+    evidence = {
+        "icp_business_type": _evidence(
+            lead.company_type, lead.category, *_pattern_evidence(ICP_TYPE, text)
+        ) if icp_match else [],
+        "cabinet_relevance": _pattern_evidence(CABINET_RELEVANCE, text),
+        "active_opportunity": _evidence(
+            lead.signal, *_pattern_evidence(ACTIVE_SIGNAL, text)
+        ) if active_match else [],
+        "scale_potential": _evidence(
+            lead.scale, *_pattern_evidence(SCALE_POTENTIAL, text)
+        ) if scale_match else [],
+        "contactability": _evidence(
+            lead.website, *business_emails, lead.phone,
+            " ".join((lead.contact_first_name, lead.contact_last_name)).strip(),
+        ),
+        "region_match": _evidence(lead.market, lead.address) if region_match else [],
+        "association_membership": _evidence(
+            lead.source, lead.category, *_pattern_evidence(ASSOCIATION_MEMBER, text)
+        ) if association_match else [],
+        "office_assignment": _evidence(office),
+    }
+    return {
+        key: {
+            "points": points[key],
+            "max_points": weights[key],
+            "evidence": evidence[key],
+        }
+        for key in DEFAULT_SCORING_WEIGHTS
+    }
+
+
+def score_breakdown(lead: Lead, weights: dict[str, int] | None = None) -> dict[str, int]:
+    """Return KCC's 100-point ICP score plus the 20-point assignment bonus."""
+    return {
+        key: int(detail["points"])
+        for key, detail in score_details(lead, weights).items()
     }
 
 

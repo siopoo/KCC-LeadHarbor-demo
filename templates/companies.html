@@ -61,6 +61,58 @@
         </td>
         <td class="select-column"><input form="bulk-company-form" type="checkbox" name="company_ids" value="{{ company.id }}" data-company-select aria-label="{{ company.name }}"></td>
       </tr>
+      <tr class="evidence-row">
+        <td colspan="13">
+          <details class="evidence-disclosure">
+            <summary>
+              <span class="evidence-icon">◎</span>
+              <strong>{{ t('view_score_evidence') }}</strong>
+              <small>{{ t('score_out_of', score=company.score, total=120) }} · {{ company.source_names|join(' / ') if company.source_names else t('source_unknown') }}</small>
+              <span class="evidence-chevron">⌄</span>
+            </summary>
+            <div class="evidence-panel">
+              <section class="score-evidence-section">
+                <div class="evidence-heading">
+                  <div><span>{{ t('score_breakdown') }}</span><h3>{{ t('score_breakdown_title') }}</h3></div>
+                  <strong>{{ company.score }}<small>/120</small></strong>
+                </div>
+                {% if company.score_differs %}
+                <p class="score-difference-note">{{ t('score_difference_note', automatic=company.automatic_score, saved=company.score) }}</p>
+                {% endif %}
+                <div class="score-rule-grid">
+                  {% for detail in company.score_details %}
+                  <article class="score-rule-item {% if detail.points %}matched{% endif %}">
+                    <div><strong>{{ t('scoring_rule_' ~ detail.key) }}</strong><b>+{{ detail.points }} / {{ detail.max_points }}</b></div>
+                    <span class="score-rule-track"><i style="width: {{ detail.percent }}%"></i></span>
+                    <p>
+                      {% if detail.evidence %}
+                        {% for evidence in detail.evidence %}<em>{{ evidence }}</em>{% endfor %}
+                      {% else %}
+                        <span>{{ t('no_supporting_evidence') }}</span>
+                      {% endif %}
+                    </p>
+                  </article>
+                  {% endfor %}
+                </div>
+              </section>
+              <aside class="source-evidence-section">
+                <div class="evidence-heading"><div><span>{{ t('source_evidence') }}</span><h3>{{ t('source_evidence_title') }}</h3></div></div>
+                <dl class="source-evidence-list">
+                  <div><dt>{{ t('discovery_source') }}</dt><dd>{{ company.source_names|join(' / ') if company.source_names else t('source_unknown') }}</dd></div>
+                  <div><dt>{{ t('source_links') }}</dt><dd>
+                    {% if company.source_links %}
+                      {% for link in company.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener">{{ link.label }} ↗</a>{% endfor %}
+                    {% else %}{{ t('not_available') }}{% endif %}
+                  </dd></div>
+                  <div><dt>{{ t('matched_keywords_label') }}</dt><dd>{{ company.matched_keywords or t('not_available') }}</dd></div>
+                  <div><dt>{{ t('evidence_updated_at') }}</dt><dd>{{ company.updated_at or t('not_available') }}</dd></div>
+                </dl>
+                <p class="evidence-note">{{ t('source_evidence_note') }}</p>
+              </aside>
+            </div>
+          </details>
+        </td>
+      </tr>
       {% else %}
       <tr><td colspan="13"><div class="empty"><p>{{ t('no_companies') }}</p></div></td></tr>
       {% endfor %}

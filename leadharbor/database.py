@@ -19,6 +19,17 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def merge_evidence_values(existing: str, incoming: str, separator: str = " | ") -> str:
+    """Combine delimited evidence without losing earlier discovery sources."""
+    values: list[str] = []
+    for group in (existing, incoming):
+        for value in (group or "").split(separator):
+            cleaned = value.strip()
+            if cleaned and cleaned.casefold() not in {item.casefold() for item in values}:
+                values.append(cleaned)
+    return separator.join(values)
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -545,6 +556,20 @@ class Database:
                             "UPDATE companies SET unique_key = ? WHERE id = ?",
                             (unique_key, name_only["id"]),
                         )
+                existing_evidence = conn.execute(
+                    "SELECT source, source_url, matched_keywords FROM companies WHERE unique_key = ?",
+                    (unique_key,),
+                ).fetchone()
+                if existing_evidence:
+                    lead.source = merge_evidence_values(
+                        existing_evidence["source"], lead.source
+                    )
+                    lead.source_url = merge_evidence_values(
+                        existing_evidence["source_url"], lead.source_url
+                    )
+                    lead.matched_keywords = merge_evidence_values(
+                        existing_evidence["matched_keywords"], lead.matched_keywords, ", "
+                    )
                 conn.execute("""
                     INSERT INTO companies (
                         unique_key, name, market, company_type, contact_first_name, contact_last_name,

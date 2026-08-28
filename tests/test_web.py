@@ -9,6 +9,7 @@ from unittest.mock import patch
 from web_app import create_app
 from leadharbor.database import Database
 from leadharbor.models import Lead
+from leadharbor.scoring import score_lead
 
 
 class WebAppTests(unittest.TestCase):
@@ -209,6 +210,7 @@ class WebAppTests(unittest.TestCase):
             "Company,Market,Address,Type,Contact First Name,Contact Last Name,Contact Info,"
             "Phone Number (if available),Signal,Scale,Score"
         ))
+        self.assertIn("Score Breakdown,Source,Source URL,Matched Keywords,Updated At", text)
 
     def test_companies_page_uses_requested_output_columns(self) -> None:
         self.client.application.config["DATABASE"].create_company(Lead(
@@ -233,6 +235,27 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(b'data-table-scrollbar', response.data)
         self.assertIn(b'aria-controls="company-output-table"', response.data)
         self.assertIn(b'row-actions-inner', response.data)
+
+    def test_companies_page_shows_score_details_and_source_evidence(self) -> None:
+        lead = Lead(
+            name="Evidence Cabinet Builders", market="Austin, TX", company_type="Builder",
+            website="https://evidence.example", email="sales@evidence.example",
+            phone="512-555-0100", signal="Recent permit for a new community",
+            scale="180 homes", source="Brave Search",
+            source_url="https://search.example/evidence", matched_keywords="cabinet, builder",
+        )
+        score_lead(lead, "cabinet builder")
+        self.client.application.config["DATABASE"].create_company(lead)
+
+        response = self.client.get("/companies")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("评分明细与来源证据".encode(), response.data)
+        self.assertIn("ICP 业务类型".encode(), response.data)
+        self.assertIn("来源页面".encode(), response.data)
+        self.assertIn(b'https://search.example/evidence', response.data)
+        self.assertIn(b'class="evidence-disclosure"', response.data)
+        self.assertIn(b"Recent permit for a new community", response.data)
 
     def test_market_dropdown_filters_table_and_current_export(self) -> None:
         db = self.client.application.config["DATABASE"]

@@ -48,6 +48,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(companies[0]["score"], 60)
         self.assertEqual(companies[0]["phone"], "123")
 
+    def test_repeated_discovery_preserves_all_source_evidence(self) -> None:
+        task_id = self.db.create_task("cabinet builder", "Texas", "brave", "", 10, False)
+        self.db.save_leads([Lead(
+            name="Acme Builders", market="Texas", website="https://acme.example",
+            source="Brave Search", source_url="https://search.example/acme",
+            matched_keywords="builder",
+        )], task_id)
+        self.db.save_leads([Lead(
+            name="Acme Builders", market="Texas", website="https://acme.example/contact",
+            source="OpenStreetMap", source_url="https://maps.example/acme",
+            matched_keywords="cabinet",
+        )], task_id)
+
+        company = self.db.list_companies()[0]
+        self.assertIn("Brave Search", company["source"])
+        self.assertIn("OpenStreetMap", company["source"])
+        self.assertIn("https://search.example/acme", company["source_url"])
+        self.assertIn("https://maps.example/acme", company["source_url"])
+        self.assertIn("builder", company["matched_keywords"])
+        self.assertIn("cabinet", company["matched_keywords"])
+
     def test_directory_contact_enriches_old_name_only_row(self) -> None:
         task_id = self.db.create_task("builder", "US", "association", "rca", 10, False)
         self.db.save_leads([Lead(name="Winkel Construction, Inc.", market="Florida")], task_id)
