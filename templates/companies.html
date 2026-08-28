@@ -5,6 +5,7 @@
   <div><p class="eyebrow">COMPANY DATABASE</p><h1>{{ t('company_database') }}</h1><p>{{ t('companies_description') }}</p></div>
   <div class="heading-actions">
     <a class="secondary-link import-database" href="{{ url_for('import_database') }}">↑ {{ t('import_database') }}</a>
+    <a class="secondary-link" href="{{ url_for('duplicate_companies') }}">◇ {{ t('duplicate_management') }}</a>
     <a class="secondary-link add-company" href="{{ url_for('create_company') }}">＋ {{ t('add_company') }}</a>
     <a class="primary button-link" href="{{ url_for('export_companies', q=query, min_score=min_score, market=market) }}">{{ t('export_results') }} ↓</a>
   </div>
@@ -45,8 +46,8 @@
         <td>{{ company_type_label(company.company_type) }}</td>
         <td>{{ company.contact_first_name or '—' }}</td>
         <td>{{ company.contact_last_name or '—' }}</td>
-        <td>{% if company.email %}<a href="mailto:{{ company.email }}">{{ company.email }}</a>{% else %}—{% endif %}</td>
-        <td>{{ company.phone or '—' }}</td>
+        <td>{% if company.email %}<a href="mailto:{{ company.email }}">{{ company.email }}</a>{% else %}—{% endif %}<span class="contact-status {{ company.email_status }}">{{ contact_status_label(company.email_status) }}</span></td>
+        <td>{{ company.phone or '—' }}<span class="contact-status {{ company.phone_status }}">{{ contact_status_label(company.phone_status) }}</span></td>
         <td>{{ company.signal or '—' }}</td>
         <td class="scale-column">{{ company.scale or '—' }}</td>
         <td class="score-column"><span class="score {% if company.score >= 90 %}high{% elif company.score >= 55 %}medium{% endif %}">{{ company.score }}</span></td>

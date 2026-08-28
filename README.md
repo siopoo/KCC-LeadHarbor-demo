@@ -103,6 +103,12 @@ and the latest collection time. Repeated discoveries merge their provenance
 instead of overwriting earlier sources. CSV exports include the same score
 breakdown and provenance fields for offline review.
 
+Data reliability tools include complete SQLite backup/restore from Settings,
+live task progress with cooperative cancellation and one-click retry, duplicate
+company review with lossless record merging, and separate validity markers for
+email and phone contacts. A safety backup is created automatically before every
+database restore.
+
 Build the Windows desktop executable:
 
 ```powershell

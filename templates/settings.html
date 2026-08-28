@@ -64,5 +64,36 @@
       </div>
     </form>
   </article>
+
+  <article class="panel settings-card database-safety-card" id="database-safety">
+    <div class="settings-card-heading">
+      <div><span class="api-mark database">DB</span><div><h2>{{ t('database_safety_title') }}</h2><p>{{ t('database_safety_description') }}</p></div></div>
+      <span class="api-status configured">SQLite</span>
+    </div>
+    <div class="database-safety-grid">
+      <section>
+        <h3>{{ t('create_backup_title') }}</h3>
+        <p>{{ t('create_backup_hint') }}</p>
+        <form method="post" action="{{ url_for('create_database_backup') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="primary" type="submit">{{ t('create_backup') }} <span>↓</span></button>
+        </form>
+        <div class="backup-list">
+          {% for backup in backups %}
+          <a href="{{ url_for('download_database_backup', filename=backup.name) }}"><span>{{ backup.name }}</span><small>{{ (backup.size / 1024 / 1024)|round(2) }} MB</small></a>
+          {% else %}<p>{{ t('no_backups') }}</p>{% endfor %}
+        </div>
+      </section>
+      <section class="restore-section">
+        <h3>{{ t('restore_backup_title') }}</h3>
+        <p>{{ t('restore_backup_hint') }}</p>
+        <form method="post" action="{{ url_for('restore_database_backup') }}" enctype="multipart/form-data" onsubmit="return confirm('{{ t('confirm_restore_backup') }}')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>{{ t('backup_file') }}<input name="backup_file" type="file" accept=".db,.sqlite,.sqlite3" required></label>
+          <button class="restore-button" type="submit">{{ t('restore_backup') }}</button>
+        </form>
+      </section>
+    </div>
+  </article>
 </section>
 {% endblock %}

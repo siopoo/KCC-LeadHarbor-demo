@@ -402,6 +402,69 @@ class WebAppTests(unittest.TestCase):
         task = restarted.config["DATABASE"].get_task(task_id)
         self.assertEqual(task["status"], "interrupted")
 
+    def test_settings_can_create_and_restore_database_backup(self) -> None:
+        db = self.client.application.config["DATABASE"]
+        original_id = db.create_company(Lead(name="Original Builder", market="Texas"))
+        created = self.client.post(
+            "/settings/database/backup", data={"csrf_token": self._csrf()},
+            follow_redirects=True,
+        )
+        self.assertIn("数据库备份已创建".encode(), created.data)
+        backups = list((db.path.parent / "backups").glob("leadharbor-backup-*.db"))
+        self.assertEqual(len(backups), 1)
+        later_id = db.create_company(Lead(name="Later Builder", market="Florida"))
+
+        restored = self.client.post(
+            "/settings/database/restore",
+            data={
+                "csrf_token": self._csrf(),
+                "backup_file": (BytesIO(backups[0].read_bytes()), backups[0].name),
+            },
+            content_type="multipart/form-data", follow_redirects=True,
+        )
+        self.assertIn("数据库已成功恢复".encode(), restored.data)
+        self.assertIsNotNone(db.get_company(original_id))
+        self.assertIsNone(db.get_company(later_id))
+
+    @patch("web_app.EXECUTOR.submit")
+    def test_task_can_be_cancelled_and_retried(self, submit) -> None:
+        db = self.client.application.config["DATABASE"]
+        task_id = db.create_task("builder", "Texas", "keyword", "", 10, False)
+        cancelled = self.client.post(
+            f"/tasks/{task_id}/cancel", data={"csrf_token": self._csrf()},
+        )
+        self.assertEqual(cancelled.status_code, 302)
+        self.assertEqual(db.get_task(task_id)["status"], "cancelled")
+
+        retried = self.client.post(
+            f"/tasks/{task_id}/retry", data={"csrf_token": self._csrf()},
+        )
+        self.assertEqual(retried.status_code, 302)
+        self.assertEqual(db.list_tasks()[0]["status"], "queued")
+        self.assertEqual(submit.call_count, 1)
+
+    def test_duplicate_management_merges_records(self) -> None:
+        db = self.client.application.config["DATABASE"]
+        keep_id = db.create_company(Lead(
+            name="Alpha Builders", market="Texas", website="https://alpha-one.example",
+            email="same@alpha.example", score=80,
+        ))
+        remove_id = db.create_company(Lead(
+            name="Alpha Construction", market="Texas", website="https://alpha-two.example",
+            email="same@alpha.example", phone="555-0100", score=60,
+        ))
+        page = self.client.get("/companies/duplicates")
+        self.assertIn("重复项管理".encode(), page.data)
+        self.assertIn(b"Alpha Builders", page.data)
+        merged = self.client.post(
+            "/companies/duplicates/merge",
+            data={"csrf_token": self._csrf(), "keep_id": keep_id, "remove_id": remove_id},
+            follow_redirects=True,
+        )
+        self.assertIn("没有发现重复企业".encode(), merged.data)
+        self.assertEqual(db.get_company(keep_id)["phone"], "555-0100")
+        self.assertIsNone(db.get_company(remove_id))
+
     def _csrf(self) -> str:
         self.client.get("/companies")
         with self.client.session_transaction() as session:
@@ -422,10 +485,15 @@ class WebAppTests(unittest.TestCase):
         edited = self.client.post(f"/companies/{company_id}/edit", data={
             "csrf_token": csrf, "name": "Manual Construction", "market": "Dallas, TX",
             "company_type": "Contractor", "website": "https://manual.example",
-            "phone": "555-0100", "score": "80",
+            "phone": "555-0100", "score": "80", "email_status": "valid",
+            "phone_status": "invalid", "contact_notes": "Phone disconnected",
         })
         self.assertEqual(edited.status_code, 302)
         self.assertEqual(self.client.application.config["DATABASE"].get_company(company_id)["phone"], "555-0100")
+        updated = self.client.application.config["DATABASE"].get_company(company_id)
+        self.assertEqual(updated["email_status"], "valid")
+        self.assertEqual(updated["phone_status"], "invalid")
+        self.assertEqual(updated["contact_notes"], "Phone disconnected")
 
         deleted = self.client.post(f"/companies/{company_id}/delete", data={"csrf_token": csrf})
         self.assertEqual(deleted.status_code, 302)

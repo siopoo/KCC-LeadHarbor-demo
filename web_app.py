@@ -6,11 +6,13 @@ import io
 import logging
 import os
 import secrets
+import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
-from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from leadharbor.associations import (
     ASSOCIATION_PRESETS, AssociationSource, PdfAssociationSource, RcaDirectorySource,
@@ -21,7 +23,7 @@ from leadharbor.database_import import missing_fields, parse_database_file
 from leadharbor.i18n import DEFAULT_LANGUAGE, LANGUAGES, translate
 from leadharbor.models import Lead
 from leadharbor.net import domain_key, normalize_url
-from leadharbor.pipeline import LeadPipeline
+from leadharbor.pipeline import LeadPipeline, TaskCancelled
 from leadharbor.search import BraveSearchSource
 from leadharbor.scoring import DEFAULT_SCORING_WEIGHTS, SCORING_TOTAL, score_details, score_lead
 from leadharbor.sources import OpenStreetMapSource
@@ -34,8 +36,18 @@ ASSOCIATION_IMPORT_LIMIT = 10_000
 MAX_ASSOCIATION_CSV_BYTES = 5 * 1024 * 1024
 MAX_ASSOCIATION_PDF_BYTES = 20 * 1024 * 1024
 MAX_DATABASE_IMPORT_BYTES = 10 * 1024 * 1024
+MAX_BACKUP_BYTES = 100 * 1024 * 1024
 ASSOCIATION_LABELS = {"rca": "Retail Contractors Association (RCA)"}
 BRAVE_API_SETTING = "brave_search_api_key"
+TASK_CANCEL_EVENTS: dict[int, threading.Event] = {}
+TASK_CANCEL_LOCK = threading.Lock()
+
+
+def submit_task(db: Database, task_id: int) -> None:
+    event = threading.Event()
+    with TASK_CANCEL_LOCK:
+        TASK_CANCEL_EVENTS[task_id] = event
+    EXECUTOR.submit(_run_task, db, task_id, event)
 
 
 def brave_api_key(db: Database) -> str:
@@ -121,6 +133,17 @@ def create_app(database_path: Path | None = None) -> Flask:
         def status_label(status: str) -> str:
             return t(f"status_{status}")
 
+        def task_progress_label(task: dict) -> str:
+            message = task.get("progress_message", "") or ""
+            if message.startswith("processing:"):
+                _, current, total = (message.split(":", 2) + ["", ""])[:3]
+                return t("task_progress_processing", current=current, total=total)
+            known = {"discovering", "exporting", "saving", "cancelling", "cancelled"}
+            return t(f"task_progress_{message}") if message in known else ""
+
+        def contact_status_label(status: str) -> str:
+            return t(f"contact_status_{status if status in {'unchecked', 'valid', 'invalid'} else 'unchecked'}")
+
         def source_label(source: str) -> str:
             return t(f"source_{source}") if source in {"keyword", "association"} else source
 
@@ -151,6 +174,8 @@ def create_app(database_path: Path | None = None) -> Flask:
         return {
             "t": t,
             "status_label": status_label,
+            "task_progress_label": task_progress_label,
+            "contact_status_label": contact_status_label,
             "source_label": source_label,
             "company_type_label": company_type_label,
             "import_field_label": import_field_label,
@@ -181,6 +206,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             "Company", "Market", "Address", "Type", "Contact First Name", "Contact Last Name",
             "Contact Info", "Phone Number (if available)", "Signal", "Scale", "Score",
             "Score Breakdown", "Source", "Source URL", "Matched Keywords", "Updated At",
+            "Email Status", "Phone Status", "Contact Notes",
         ]
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fields)
@@ -201,6 +227,9 @@ def create_app(database_path: Path | None = None) -> Flask:
                 "Source": row.get("source", ""), "Source URL": row.get("source_url", ""),
                 "Matched Keywords": row.get("matched_keywords", ""),
                 "Updated At": row.get("updated_at", ""),
+                "Email Status": row.get("email_status", "unchecked"),
+                "Phone Status": row.get("phone_status", "unchecked"),
+                "Contact Notes": row.get("contact_notes", ""),
             })
         return Response(
             "\ufeff" + output.getvalue(),
@@ -296,7 +325,7 @@ def create_app(database_path: Path | None = None) -> Flask:
         task_id = db.create_task(
             keyword, canonical_location, "keyword", "", requested_limit, crawl_websites
         )
-        EXECUTOR.submit(_run_task, db, task_id)
+        submit_task(db, task_id)
         if brave_api_key(db):
             flash(translate(g.language, "flash_keyword_queued", id=task_id), "success")
         else:
@@ -316,7 +345,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             "retail contractor", "United States", "association", association,
             ASSOCIATION_IMPORT_LIMIT, crawl_websites,
         )
-        EXECUTOR.submit(_run_task, db, task_id)
+        submit_task(db, task_id)
         flash(translate(g.language, "flash_association_queued", id=task_id), "success")
         return redirect(url_for("dashboard"))
 
@@ -355,7 +384,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             "association member", original_name, "association", f"csv:{stored_path}",
             ASSOCIATION_IMPORT_LIMIT, crawl_websites,
         )
-        EXECUTOR.submit(_run_task, db, task_id)
+        submit_task(db, task_id)
         flash(translate(g.language, "flash_csv_queued", id=task_id), "success")
         return redirect(url_for("dashboard"))
 
@@ -443,7 +472,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             "association member", preview["association_name"], "association",
             f"pdf:{preview_id}", ASSOCIATION_IMPORT_LIMIT, crawl_websites,
         )
-        EXECUTOR.submit(_run_task, db, task_id)
+        submit_task(db, task_id)
         flash(translate(g.language, "flash_pdf_queued", id=task_id), "success")
         return redirect(url_for("dashboard"))
 
@@ -456,11 +485,50 @@ def create_app(database_path: Path | None = None) -> Flask:
         flash(translate(g.language, key), "success" if deleted else "error")
         return redirect(url_for("dashboard"))
 
+    @app.route("/tasks/<int:task_id>/cancel", methods=["POST"])
+    def cancel_task(task_id: int):
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        status = db.request_task_cancel(task_id)
+        if not status:
+            flash(translate(g.language, "flash_task_cancel_blocked"), "error")
+        else:
+            with TASK_CANCEL_LOCK:
+                event = TASK_CANCEL_EVENTS.get(task_id)
+            if event:
+                event.set()
+            flash(translate(g.language, "flash_task_cancelled"), "success")
+        return redirect(url_for("dashboard"))
+
+    @app.route("/tasks/<int:task_id>/retry", methods=["POST"])
+    def retry_task(task_id: int):
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        new_task_id = db.retry_task(task_id)
+        if not new_task_id:
+            flash(translate(g.language, "flash_task_retry_blocked"), "error")
+        else:
+            submit_task(db, new_task_id)
+            flash(translate(g.language, "flash_task_retried", id=new_task_id), "success")
+        return redirect(url_for("dashboard"))
+
     @app.route("/api/tasks/<int:task_id>", methods=["GET"])
     def task_status(task_id: int):
         task = app.config["DATABASE"].get_task(task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
+        message = task.get("progress_message", "") or ""
+        if message.startswith("processing:"):
+            _, current, total = (message.split(":", 2) + ["", ""])[:3]
+            task["progress_label"] = translate(
+                g.language, "task_progress_processing", current=current, total=total,
+            )
+        else:
+            task["progress_label"] = translate(
+                g.language, f"task_progress_{message}",
+            ) if message in {"discovering", "exporting", "saving", "cancelling", "cancelled"} else ""
         return jsonify(task)
 
     @app.route("/companies", methods=["GET"])
@@ -485,6 +553,27 @@ def create_app(database_path: Path | None = None) -> Flask:
             business_states=BUSINESS_STATES,
             stats=db.stats(),
         )
+
+    @app.route("/companies/duplicates", methods=["GET"])
+    def duplicate_companies():
+        groups = app.config["DATABASE"].find_duplicate_groups()
+        return render_template("company_duplicates.html", groups=groups)
+
+    @app.route("/companies/duplicates/merge", methods=["POST"])
+    def merge_duplicate_companies():
+        if not valid_csrf():
+            abort(400)
+        try:
+            keep_id = int(request.form.get("keep_id", "0"))
+            remove_id = int(request.form.get("remove_id", "0"))
+        except ValueError:
+            keep_id = remove_id = 0
+        merged = app.config["DATABASE"].merge_companies(keep_id, remove_id)
+        flash(
+            translate(g.language, "flash_companies_merged" if merged else "flash_merge_failed"),
+            "success" if merged else "error",
+        )
+        return redirect(url_for("duplicate_companies"))
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
@@ -522,6 +611,12 @@ def create_app(database_path: Path | None = None) -> Flask:
             return redirect(url_for("settings"))
 
         configured_key = brave_api_key(db)
+        backups_dir = db.path.parent / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        backups = [
+            {"name": path.name, "size": path.stat().st_size, "updated_at": path.stat().st_mtime}
+            for path in sorted(backups_dir.glob("*.db"), key=lambda item: item.stat().st_mtime, reverse=True)[:12]
+        ]
         return render_template(
             "settings.html",
             brave_configured=bool(configured_key),
@@ -532,7 +627,63 @@ def create_app(database_path: Path | None = None) -> Flask:
             ),
             scoring_weights=db.get_scoring_weights(),
             scoring_total=SCORING_TOTAL,
+            backups=backups,
         )
+
+    @app.route("/settings/database/backup", methods=["POST"])
+    def create_database_backup():
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        timestamp = utc_now()[:19].replace("-", "").replace(":", "").replace("T", "-")
+        filename = f"leadharbor-backup-{timestamp}-{secrets.token_hex(2)}.db"
+        db.create_backup(db.path.parent / "backups" / filename)
+        flash(translate(g.language, "flash_backup_created"), "success")
+        return redirect(url_for("settings") + "#database-safety")
+
+    @app.route("/settings/database/backup/<path:filename>", methods=["GET"])
+    def download_database_backup(filename: str):
+        if Path(filename).name != filename or not filename.endswith(".db"):
+            abort(404)
+        backup = app.config["DATABASE"].path.parent / "backups" / filename
+        if not backup.is_file():
+            abort(404)
+        return send_file(backup, as_attachment=True, download_name=filename)
+
+    @app.route("/settings/database/restore", methods=["POST"])
+    def restore_database_backup():
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        if db.stats()["running"]:
+            flash(translate(g.language, "flash_restore_tasks_running"), "error")
+            return redirect(url_for("settings") + "#database-safety")
+        uploaded = request.files.get("backup_file")
+        if not uploaded or not uploaded.filename:
+            flash(translate(g.language, "flash_choose_backup"), "error")
+            return redirect(url_for("settings") + "#database-safety")
+        filename = Path(uploaded.filename.replace("\\", "/")).name
+        payload = uploaded.read(MAX_BACKUP_BYTES + 1)
+        if Path(filename).suffix.casefold() not in {".db", ".sqlite", ".sqlite3"} or not payload or len(payload) > MAX_BACKUP_BYTES:
+            flash(translate(g.language, "flash_invalid_backup"), "error")
+            return redirect(url_for("settings") + "#database-safety")
+        imports_dir = db.path.parent / "imports"
+        imports_dir.mkdir(parents=True, exist_ok=True)
+        temporary = imports_dir / f"restore-{secrets.token_hex(8)}.db"
+        temporary.write_bytes(payload)
+        try:
+            timestamp = utc_now()[:19].replace("-", "").replace(":", "").replace("T", "-")
+            db.create_backup(db.path.parent / "backups" / f"before-restore-{timestamp}.db")
+            db.restore_backup(temporary)
+            db.recover_interrupted_tasks()
+        except (ValueError, sqlite3.DatabaseError, OSError) as exc:
+            LOG.warning("Database restore failed: %s", exc)
+            flash(translate(g.language, "flash_invalid_backup"), "error")
+        else:
+            flash(translate(g.language, "flash_backup_restored"), "success")
+        finally:
+            temporary.unlink(missing_ok=True)
+        return redirect(url_for("settings") + "#database-safety")
 
     @app.route("/companies/new", methods=["GET", "POST"])
     def create_company():
@@ -540,7 +691,13 @@ def create_app(database_path: Path | None = None) -> Flask:
             if not valid_csrf():
                 abort(400)
             try:
-                company_id = app.config["DATABASE"].create_company(company_from_form())
+                db: Database = app.config["DATABASE"]
+                company_id = db.create_company(company_from_form())
+                db.update_contact_status(
+                    company_id, request.form.get("email_status", "unchecked"),
+                    request.form.get("phone_status", "unchecked"),
+                    request.form.get("contact_notes", ""),
+                )
             except ValueError as exc:
                 key = company_error_key(exc)
                 flash(translate(g.language, key), "error")
@@ -647,6 +804,11 @@ def create_app(database_path: Path | None = None) -> Flask:
                 abort(400)
             try:
                 db.update_company(company_id, company_from_form())
+                db.update_contact_status(
+                    company_id, request.form.get("email_status", "unchecked"),
+                    request.form.get("phone_status", "unchecked"),
+                    request.form.get("contact_notes", ""),
+                )
             except ValueError as exc:
                 key = company_error_key(exc)
                 flash(translate(g.language, key), "error")
@@ -752,11 +914,22 @@ def _task_sources(task: dict, db: Database) -> list[object]:
     return selected
 
 
-def _run_task(db: Database, task_id: int) -> None:
+def _run_task(db: Database, task_id: int, cancel_event: threading.Event | None = None) -> None:
+    cancel_event = cancel_event or threading.Event()
     task = db.get_task(task_id)
     if not task:
         return
-    db.update_task(task_id, status="running", started_at=utc_now())
+    if task["status"] in {"cancelled", "cancelling"} or cancel_event.is_set():
+        db.update_task(
+            task_id, status="cancelled", progress_message="cancelled", finished_at=utc_now(),
+        )
+        with TASK_CANCEL_LOCK:
+            TASK_CANCEL_EVENTS.pop(task_id, None)
+        return
+    db.update_task(
+        task_id, status="running", progress=1, progress_message="discovering",
+        started_at=utc_now(),
+    )
     try:
         output = app_data_dir() / "exports" / f"task-{task_id}.csv"
         pipeline = LeadPipeline(
@@ -766,14 +939,26 @@ def _run_task(db: Database, task_id: int) -> None:
             sources=_task_sources(task, db),
             scoring_weights=db.get_scoring_weights(),
         )
-        leads = pipeline.run(task["keyword"], task["location"], task["requested_limit"], output)
+        leads = pipeline.run(
+            task["keyword"], task["location"], task["requested_limit"], output,
+            progress=lambda value, message: db.update_task(
+                task_id, progress=max(0, min(99, value)), progress_message=message,
+            ),
+            is_cancelled=cancel_event.is_set,
+        )
         db.save_leads(leads, task_id)
         db.update_task(
             task_id,
             status="completed",
             result_count=len(leads),
             output_path=str(output),
+            progress=100,
+            progress_message="",
             finished_at=utc_now(),
+        )
+    except TaskCancelled:
+        db.update_task(
+            task_id, status="cancelled", progress_message="cancelled", finished_at=utc_now(),
         )
     except Exception as exc:
         LOG.exception("Task %s failed", task_id)
@@ -783,6 +968,9 @@ def _run_task(db: Database, task_id: int) -> None:
             error_message=str(exc)[:1000],
             finished_at=utc_now(),
         )
+    finally:
+        with TASK_CANCEL_LOCK:
+            TASK_CANCEL_EVENTS.pop(task_id, None)
 
 
 app = create_app()

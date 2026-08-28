@@ -1,5 +1,5 @@
 const activeTasks = [...document.querySelectorAll('[data-task-id]')]
-  .filter((item) => ['queued', 'running'].includes(item.dataset.status));
+  .filter((item) => ['queued', 'running', 'cancelling'].includes(item.dataset.status));
 
 if (activeTasks.length) {
   const poll = async () => {
@@ -9,6 +9,12 @@ if (activeTasks.length) {
         const response = await fetch(`/api/tasks/${item.dataset.taskId}`);
         const task = await response.json();
         if (task.status !== item.dataset.status) changed = true;
+        const bar = item.querySelector('[data-task-progress-bar]');
+        const value = item.querySelector('[data-task-progress-value]');
+        const label = item.querySelector('[data-task-progress-label]');
+        if (bar) bar.value = Number(task.progress) || 0;
+        if (value) value.textContent = `${Number(task.progress) || 0}%`;
+        if (label && task.progress_label) label.textContent = task.progress_label;
       } catch (_) {}
     }));
     if (changed) window.location.reload();

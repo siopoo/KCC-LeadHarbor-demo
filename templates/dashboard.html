@@ -93,13 +93,29 @@
         <strong>{{ task_title(task) }}</strong>
         <span>{{ task.location }} · {{ source_label(task.source) }}</span>
         <small>#{{ task.id }} · {{ t('result_count', count=task.result_count) }}</small>
-        {% if task.error_message %}<p class="task-error">{{ t('interrupted_hint') if task.status == 'interrupted' else task.error_message }}</p>{% endif %}
-        {% if task.status not in ['queued', 'running'] %}
-        <form method="post" action="{{ url_for('delete_task', task_id=task.id) }}" class="task-delete" onsubmit="return confirm('{{ t('confirm_delete_task') }}')">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit">{{ t('delete_history') }}</button>
-        </form>
+        {% if task.status in ['queued', 'running', 'cancelling'] %}
+        <div class="task-progress" data-task-progress>
+          <div><span data-task-progress-label>{{ task_progress_label(task) or t('task_progress_waiting') }}</span><b data-task-progress-value>{{ task.progress }}%</b></div>
+          <progress max="100" value="{{ task.progress }}" data-task-progress-bar></progress>
+        </div>
         {% endif %}
+        {% if task.error_message %}<p class="task-error">{{ t('interrupted_hint') if task.status == 'interrupted' else task.error_message }}</p>{% endif %}
+        <div class="task-actions">
+          {% if task.status in ['queued', 'running'] %}
+          <form method="post" action="{{ url_for('cancel_task', task_id=task.id) }}" onsubmit="return confirm('{{ t('confirm_cancel_task') }}')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="task-cancel" type="submit">{{ t('cancel_task') }}</button>
+          </form>
+          {% elif task.status in ['failed', 'interrupted', 'cancelled'] %}
+          <form method="post" action="{{ url_for('retry_task', task_id=task.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="task-retry" type="submit">{{ t('retry_task') }}</button>
+          </form>
+          {% endif %}
+          {% if task.status not in ['queued', 'running', 'cancelling'] %}
+          <form method="post" action="{{ url_for('delete_task', task_id=task.id) }}" onsubmit="return confirm('{{ t('confirm_delete_task') }}')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">{{ t('delete_history') }}</button>
+          </form>
+          {% endif %}
+        </div>
       </div>
       {% else %}
       <div class="empty"><span>⌁</span><p>{{ t('no_tasks') }}</p><small>{{ t('no_tasks_hint') }}</small></div>

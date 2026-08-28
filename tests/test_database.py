@@ -187,6 +187,56 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(self.db.get_task(completed))
         self.assertIsNotNone(self.db.get_task(active))
 
+    def test_task_cancel_and_retry_lifecycle(self) -> None:
+        queued = self.db.create_task("builder", "Texas", "keyword", "", 20, True)
+        self.assertEqual(self.db.request_task_cancel(queued), "cancelled")
+        self.assertEqual(self.db.get_task(queued)["status"], "cancelled")
+        retry_id = self.db.retry_task(queued)
+        self.assertIsNotNone(retry_id)
+        self.assertEqual(self.db.get_task(retry_id)["status"], "queued")
+
+        self.db.update_task(retry_id, status="running", progress=42, progress_message="processing:2:5")
+        self.assertEqual(self.db.request_task_cancel(retry_id), "cancelling")
+        self.assertEqual(self.db.get_task(retry_id)["progress"], 42)
+
+    def test_database_backup_and_restore_round_trip(self) -> None:
+        original_id = self.db.create_company(Lead(name="Backup Builder", market="Texas"))
+        backup = Path(self.temp_dir.name) / "backup.db"
+        self.db.create_backup(backup)
+        added_id = self.db.create_company(Lead(name="Added Later", market="Florida"))
+        self.assertIsNotNone(self.db.get_company(added_id))
+
+        self.db.restore_backup(backup)
+
+        self.assertIsNotNone(self.db.get_company(original_id))
+        self.assertIsNone(self.db.get_company(added_id))
+
+    def test_duplicate_groups_merge_contacts_sources_and_validity(self) -> None:
+        keep_id = self.db.create_company(Lead(
+            name="Acme Builders", market="Texas", website="https://acme-one.example",
+            email="sales@acme.example", source="Brave Search", score=80,
+        ))
+        remove_id = self.db.create_company(Lead(
+            name="Acme Construction", market="Texas", website="https://acme-two.example",
+            email="sales@acme.example", phone="555-0100", source="Association", score=60,
+        ))
+        self.db.update_contact_status(keep_id, "valid", "unchecked", "Email confirmed")
+        self.db.update_contact_status(remove_id, "unchecked", "invalid", "Phone disconnected")
+        groups = self.db.find_duplicate_groups()
+        self.assertEqual(len(groups), 1)
+        self.assertIn("email", groups[0]["reasons"])
+
+        self.assertTrue(self.db.merge_companies(keep_id, remove_id))
+
+        merged = self.db.get_company(keep_id)
+        self.assertIsNone(self.db.get_company(remove_id))
+        self.assertEqual(merged["phone"], "555-0100")
+        self.assertIn("Brave Search", merged["source"])
+        self.assertIn("Association", merged["source"])
+        self.assertEqual(merged["email_status"], "valid")
+        self.assertEqual(merged["phone_status"], "invalid")
+        self.assertIn("Email confirmed", merged["contact_notes"])
+
     def test_original_database_import_marks_duplicates_and_only_fills_blanks(self) -> None:
         existing_id = self.db.create_company(Lead(
             name="Acme Builders", market="Texas", website="https://acme.example",

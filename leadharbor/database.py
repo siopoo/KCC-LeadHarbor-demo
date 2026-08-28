@@ -58,6 +58,8 @@ class Database:
                     result_count INTEGER NOT NULL DEFAULT 0,
                     error_message TEXT NOT NULL DEFAULT '',
                     output_path TEXT NOT NULL DEFAULT '',
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    progress_message TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT
@@ -85,6 +87,9 @@ class Database:
                     current_lead_status TEXT NOT NULL DEFAULT 'Unchecked',
                     score INTEGER NOT NULL DEFAULT 0,
                     matched_keywords TEXT NOT NULL DEFAULT '',
+                    email_status TEXT NOT NULL DEFAULT 'unchecked',
+                    phone_status TEXT NOT NULL DEFAULT 'unchecked',
+                    contact_notes TEXT NOT NULL DEFAULT '',
                     task_id INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -158,10 +163,22 @@ class Database:
                 "signal": "TEXT NOT NULL DEFAULT ''",
                 "scale": "TEXT NOT NULL DEFAULT ''",
                 "current_lead_status": "TEXT NOT NULL DEFAULT 'Unchecked'",
+                "email_status": "TEXT NOT NULL DEFAULT 'unchecked'",
+                "phone_status": "TEXT NOT NULL DEFAULT 'unchecked'",
+                "contact_notes": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in migrations.items():
                 if column not in existing_columns:
                     conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {definition}")
+            task_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(crawl_tasks)").fetchall()
+            }
+            for column, definition in {
+                "progress": "INTEGER NOT NULL DEFAULT 0",
+                "progress_message": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in task_columns:
+                    conn.execute(f"ALTER TABLE crawl_tasks ADD COLUMN {column} {definition}")
             conn.execute("""
                 UPDATE companies
                 SET market = COALESCE(
@@ -310,18 +327,21 @@ class Database:
         with self.connect() as conn:
             cursor = conn.execute("""
                 UPDATE crawl_tasks
-                SET status = 'interrupted',
+                SET status = CASE WHEN status = 'cancelling' THEN 'cancelled' ELSE 'interrupted' END,
                     error_message = CASE
-                        WHEN error_message = '' THEN '程序在任务完成前关闭，请重新创建任务。'
+                        WHEN status != 'cancelling' AND error_message = '' THEN '程序在任务完成前关闭，请重新创建任务。'
                         ELSE error_message
                     END,
                     finished_at = ?
-                WHERE status IN ('queued', 'running')
+                WHERE status IN ('queued', 'running', 'cancelling')
             """, (finished_at,))
             return cursor.rowcount
 
     def update_task(self, task_id: int, **values: Any) -> None:
-        allowed = {"status", "result_count", "error_message", "output_path", "started_at", "finished_at"}
+        allowed = {
+            "status", "result_count", "error_message", "output_path", "started_at",
+            "finished_at", "progress", "progress_message",
+        }
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return
@@ -354,9 +374,61 @@ class Database:
         with self.connect() as conn:
             cursor = conn.execute("""
                 DELETE FROM crawl_tasks
-                WHERE id = ? AND status NOT IN ('queued', 'running')
+                WHERE id = ? AND status NOT IN ('queued', 'running', 'cancelling')
             """, (task_id,))
             return cursor.rowcount == 1
+
+    def request_task_cancel(self, task_id: int) -> str:
+        """Cancel a queued task immediately or mark a running task for cooperative cancellation."""
+        with self.connect() as conn:
+            task = conn.execute(
+                "SELECT status FROM crawl_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if not task or task["status"] not in {"queued", "running", "cancelling"}:
+                return ""
+            if task["status"] == "queued":
+                conn.execute("""
+                    UPDATE crawl_tasks SET status = 'cancelled', progress_message = 'cancelled',
+                        finished_at = ? WHERE id = ?
+                """, (utc_now(), task_id))
+                return "cancelled"
+            conn.execute("""
+                UPDATE crawl_tasks SET status = 'cancelling', progress_message = 'cancelling'
+                WHERE id = ?
+            """, (task_id,))
+            return "cancelling"
+
+    def retry_task(self, task_id: int) -> int | None:
+        with self.connect() as conn:
+            task = conn.execute(
+                "SELECT * FROM crawl_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if not task or task["status"] not in {"failed", "interrupted", "cancelled"}:
+                return None
+        return self.create_task(
+            task["keyword"], task["location"], task["source"], task["association"],
+            task["requested_limit"], bool(task["crawl_websites"]),
+        )
+
+    def create_backup(self, target: Path) -> Path:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as source, sqlite3.connect(str(target)) as destination:
+            source.backup(destination)
+        return target
+
+    def restore_backup(self, source_path: Path) -> None:
+        uri = f"file:{source_path.resolve().as_posix()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as source:
+            tables = {
+                row[0] for row in source.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            if not {"companies", "crawl_tasks", "app_metadata"}.issubset(tables):
+                raise ValueError("not a LeadHarbor backup")
+            with self.connect() as destination:
+                source.backup(destination)
+        self.initialize()
 
     def create_pdf_preview(
         self, association_name: str, pdf_path: Path, source_url: str, member_count: int,
@@ -672,6 +744,129 @@ class Database:
             cursor = conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
             return cursor.rowcount == 1
 
+    def update_contact_status(
+        self, company_id: int, email_status: str, phone_status: str, notes: str = "",
+    ) -> bool:
+        allowed = {"unchecked", "valid", "invalid"}
+        email_status = email_status if email_status in allowed else "unchecked"
+        phone_status = phone_status if phone_status in allowed else "unchecked"
+        with self.connect() as conn:
+            cursor = conn.execute("""
+                UPDATE companies SET email_status = ?, phone_status = ?, contact_notes = ?,
+                    updated_at = ? WHERE id = ?
+            """, (email_status, phone_status, notes.strip()[:1000], utc_now(), company_id))
+            return cursor.rowcount == 1
+
+    @staticmethod
+    def _duplicate_tokens(company: dict[str, Any]) -> dict[str, str]:
+        email = (company.get("email") or "").split(",", 1)[0].strip().casefold()
+        phone = "".join(character for character in (company.get("phone") or "") if character.isdigit())
+        return {
+            "website": domain_key(company.get("website") or ""),
+            "name": " ".join((company.get("name") or "").casefold().split()),
+            "email": email,
+            "phone": phone if len(phone) >= 7 else "",
+        }
+
+    def find_duplicate_groups(self) -> list[dict[str, Any]]:
+        """Return connected groups that share a website, name, email, or phone."""
+        with self.connect() as conn:
+            companies = [dict(row) for row in conn.execute(
+                "SELECT * FROM companies ORDER BY score DESC, id"
+            ).fetchall()]
+        parent = {company["id"]: company["id"] for company in companies}
+        reasons: dict[tuple[int, int], set[str]] = {}
+
+        def find(value: int) -> int:
+            while parent[value] != value:
+                parent[value] = parent[parent[value]]
+                value = parent[value]
+            return value
+
+        def union(left: int, right: int) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        seen: dict[tuple[str, str], int] = {}
+        for company in companies:
+            for field, value in self._duplicate_tokens(company).items():
+                if not value:
+                    continue
+                key = (field, value)
+                other = seen.get(key)
+                if other is None:
+                    seen[key] = company["id"]
+                    continue
+                pair = tuple(sorted((other, company["id"])))
+                reasons.setdefault(pair, set()).add(field)
+                union(other, company["id"])
+
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for company in companies:
+            grouped.setdefault(find(company["id"]), []).append(company)
+        result: list[dict[str, Any]] = []
+        for members in grouped.values():
+            if len(members) < 2:
+                continue
+            member_ids = {member["id"] for member in members}
+            group_reasons = sorted({
+                reason for pair, pair_reasons in reasons.items()
+                if set(pair).issubset(member_ids) for reason in pair_reasons
+            })
+            result.append({"companies": members, "reasons": group_reasons})
+        return result
+
+    def merge_companies(self, keep_id: int, remove_id: int) -> bool:
+        if keep_id == remove_id:
+            return False
+        with self.connect() as conn:
+            keep_row = conn.execute("SELECT * FROM companies WHERE id = ?", (keep_id,)).fetchone()
+            remove_row = conn.execute("SELECT * FROM companies WHERE id = ?", (remove_id,)).fetchone()
+            if not keep_row or not remove_row:
+                return False
+            keep, remove = dict(keep_row), dict(remove_row)
+            fill_fields = (
+                "market", "company_type", "contact_first_name", "contact_last_name", "website",
+                "address", "country", "category", "description", "signal", "scale", "task_id",
+            )
+            merged = {
+                field: keep.get(field) or remove.get(field) or "" for field in fill_fields
+            }
+            merged["task_id"] = keep.get("task_id") or remove.get("task_id") or None
+            for field, separator in (
+                ("email", ", "), ("phone", ", "), ("source", " | "),
+                ("source_url", " | "), ("matched_keywords", ", "),
+            ):
+                merged[field] = merge_evidence_values(
+                    keep.get(field, ""), remove.get(field, ""), separator,
+                )
+            for field in ("email_status", "phone_status"):
+                statuses = {keep.get(field), remove.get(field)}
+                merged[field] = "invalid" if "invalid" in statuses else (
+                    "valid" if "valid" in statuses else "unchecked"
+                )
+            merged["contact_notes"] = merge_evidence_values(
+                keep.get("contact_notes", ""), remove.get("contact_notes", ""), " | "
+            )
+            merged["current_lead_status"] = (
+                keep.get("current_lead_status")
+                if keep.get("current_lead_status") not in {"", "Unchecked"}
+                else remove.get("current_lead_status") or "Unchecked"
+            )
+            merged["score"] = max(int(keep.get("score", 0)), int(remove.get("score", 0)))
+            assignments = ", ".join(f"{field} = ?" for field in merged)
+            conn.execute(
+                f"UPDATE companies SET {assignments}, updated_at = ? WHERE id = ?",
+                [*merged.values(), utc_now(), keep_id],
+            )
+            conn.execute(
+                "UPDATE database_import_rows SET match_company_id = ? WHERE match_company_id = ?",
+                (keep_id, remove_id),
+            )
+            conn.execute("DELETE FROM companies WHERE id = ?", (remove_id,))
+            return True
+
     def delete_companies(self, company_ids: list[int]) -> int:
         ids = sorted({value for value in company_ids if value > 0})
         if not ids:
@@ -732,7 +927,7 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM companies").fetchall()
             running = conn.execute(
-                "SELECT COUNT(*) FROM crawl_tasks WHERE status IN ('queued', 'running')"
+                "SELECT COUNT(*) FROM crawl_tasks WHERE status IN ('queued', 'running', 'cancelling')"
             ).fetchone()[0]
         companies = self._with_target_markets(rows)
         total = len(companies)

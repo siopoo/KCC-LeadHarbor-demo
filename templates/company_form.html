@@ -33,6 +33,9 @@
     <label>{{ t('field_last_name') }}<input name="contact_last_name" maxlength="100" value="{{ company.contact_last_name or '' }}"></label>
     <label>{{ t('field_email') }}<input name="email" type="email" maxlength="500" value="{{ company.email or '' }}"></label>
     <label>{{ t('field_phone') }}<input name="phone" maxlength="500" value="{{ company.phone or '' }}"></label>
+    <label>{{ t('email_validity') }}<select name="email_status">{% for value in ['unchecked', 'valid', 'invalid'] %}<option value="{{ value }}" {% if (company.email_status or 'unchecked') == value %}selected{% endif %}>{{ contact_status_label(value) }}</option>{% endfor %}</select></label>
+    <label>{{ t('phone_validity') }}<select name="phone_status">{% for value in ['unchecked', 'valid', 'invalid'] %}<option value="{{ value }}" {% if (company.phone_status or 'unchecked') == value %}selected{% endif %}>{{ contact_status_label(value) }}</option>{% endfor %}</select></label>
+    <label class="wide contact-notes-field">{{ t('contact_notes') }}<textarea name="contact_notes" maxlength="1000" rows="3" placeholder="{{ t('contact_notes_placeholder') }}">{{ company.contact_notes or '' }}</textarea></label>
     <label class="wide">{{ t('field_website') }}<input name="website" type="url" maxlength="500" value="{{ company.website or '' }}" placeholder="https://example.com"></label>
     <label class="wide">{{ t('field_address') }}<input name="address" maxlength="500" value="{{ company.address or '' }}"></label>
     <label>{{ t('field_signal') }}<input name="signal" maxlength="500" value="{{ company.signal or '' }}"></label>
