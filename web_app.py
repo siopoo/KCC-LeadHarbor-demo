@@ -21,6 +21,11 @@ from leadharbor.classification import TARGET_STATE_NAMES, prepare_output_fields
 from leadharbor.database import Database, utc_now
 from leadharbor.database_import import missing_fields, parse_database_file
 from leadharbor.i18n import DEFAULT_LANGUAGE, LANGUAGES, translate
+from leadharbor.hubspot.associations import HubSpotAssociations
+from leadharbor.hubspot.client import HubSpotClient, HubSpotError
+from leadharbor.hubspot.companies import HubSpotCompanies
+from leadharbor.hubspot.contacts import HubSpotContacts
+from leadharbor.hubspot.sync import HubSpotSyncService
 from leadharbor.models import Lead
 from leadharbor.net import domain_key, normalize_url
 from leadharbor.pipeline import LeadPipeline, TaskCancelled
@@ -39,6 +44,9 @@ MAX_DATABASE_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_BACKUP_BYTES = 100 * 1024 * 1024
 ASSOCIATION_LABELS = {"rca": "Retail Contractors Association (RCA)"}
 BRAVE_API_SETTING = "brave_search_api_key"
+HUBSPOT_TOKEN_SETTING = "hubspot_access_token"
+HUBSPOT_LAST_TEST_AT_SETTING = "hubspot_last_test_at"
+HUBSPOT_LAST_TEST_STATUS_SETTING = "hubspot_last_test_status"
 TASK_CANCEL_EVENTS: dict[int, threading.Event] = {}
 TASK_CANCEL_LOCK = threading.Lock()
 
@@ -52,6 +60,28 @@ def submit_task(db: Database, task_id: int) -> None:
 
 def brave_api_key(db: Database) -> str:
     return db.get_setting(BRAVE_API_SETTING).strip() or os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+
+
+def hubspot_access_token(db: Database) -> str:
+    """Environment configuration deliberately takes priority over local settings."""
+    return os.getenv("HUBSPOT_ACCESS_TOKEN", "").strip() or db.get_setting(
+        HUBSPOT_TOKEN_SETTING
+    ).strip()
+
+
+def mask_credential(value: str) -> str:
+    return ("•" * 12 + value[-4:]) if value else ""
+
+
+def build_hubspot_client(db: Database) -> HubSpotClient:
+    return HubSpotClient(hubspot_access_token(db))
+
+
+def build_hubspot_service(db: Database) -> HubSpotSyncService:
+    client = build_hubspot_client(db)
+    return HubSpotSyncService(
+        db, HubSpotCompanies(client), HubSpotContacts(client), HubSpotAssociations(client),
+    )
 
 
 def company_with_evidence(
@@ -144,6 +174,11 @@ def create_app(database_path: Path | None = None) -> Flask:
         def contact_status_label(status: str) -> str:
             return t(f"contact_status_{status if status in {'unchecked', 'valid', 'invalid'} else 'unchecked'}")
 
+        def hubspot_status_label(status: str) -> str:
+            known = {"UNCHECKED", "NEW", "DUPLICATE", "ENRICHABLE", "CONFLICT", "SYNCED", "FAILED", "RECHECK_REQUIRED", "SKIPPED"}
+            selected = status if status in known else "UNCHECKED"
+            return t(f"hubspot_status_{selected.casefold()}")
+
         def source_label(source: str) -> str:
             return t(f"source_{source}") if source in {"keyword", "association"} else source
 
@@ -176,6 +211,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             "status_label": status_label,
             "task_progress_label": task_progress_label,
             "contact_status_label": contact_status_label,
+            "hubspot_status_label": hubspot_status_label,
             "source_label": source_label,
             "company_type_label": company_type_label,
             "import_field_label": import_field_label,
@@ -187,7 +223,7 @@ def create_app(database_path: Path | None = None) -> Flask:
 
     def valid_csrf() -> bool:
         expected = session.get("csrf_token", "")
-        supplied = request.form.get("csrf_token", "")
+        supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
         return bool(expected and supplied and hmac.compare_digest(expected, supplied))
 
     def selected_company_ids() -> list[int]:
@@ -581,6 +617,20 @@ def create_app(database_path: Path | None = None) -> Flask:
         if request.method == "POST":
             if not valid_csrf():
                 abort(400)
+            if request.form.get("settings_section") == "hubspot":
+                if request.form.get("remove_hubspot_token") == "on":
+                    db.set_setting(HUBSPOT_TOKEN_SETTING, "")
+                    db.set_setting(HUBSPOT_LAST_TEST_STATUS_SETTING, "")
+                    flash(translate(g.language, "flash_hubspot_removed"), "success")
+                else:
+                    token = request.form.get("hubspot_access_token", "").strip()[:1000]
+                    if token:
+                        db.set_setting(HUBSPOT_TOKEN_SETTING, token)
+                        db.set_setting(HUBSPOT_LAST_TEST_STATUS_SETTING, "not_tested")
+                        flash(translate(g.language, "flash_hubspot_saved"), "success")
+                    else:
+                        flash(translate(g.language, "flash_hubspot_token_required"), "error")
+                return redirect(url_for("settings") + "#hubspot-integration")
             if request.form.get("settings_section") == "scoring":
                 values: dict[str, object]
                 if request.form.get("reset_scoring") == "1":
@@ -611,6 +661,7 @@ def create_app(database_path: Path | None = None) -> Flask:
             return redirect(url_for("settings"))
 
         configured_key = brave_api_key(db)
+        configured_hubspot_token = hubspot_access_token(db)
         backups_dir = db.path.parent / "backups"
         backups_dir.mkdir(parents=True, exist_ok=True)
         backups = [
@@ -625,10 +676,95 @@ def create_app(database_path: Path | None = None) -> Flask:
                 not db.get_setting(BRAVE_API_SETTING).strip()
                 and os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
             ),
+            hubspot_configured=bool(configured_hubspot_token),
+            hubspot_masked=mask_credential(configured_hubspot_token),
+            hubspot_from_environment=bool(os.getenv("HUBSPOT_ACCESS_TOKEN", "").strip()),
+            hubspot_connection_status=db.get_setting(HUBSPOT_LAST_TEST_STATUS_SETTING),
+            hubspot_last_test_at=db.get_setting(HUBSPOT_LAST_TEST_AT_SETTING),
             scoring_weights=db.get_scoring_weights(),
             scoring_total=SCORING_TOTAL,
             backups=backups,
         )
+
+    @app.route("/api/integrations/hubspot/test", methods=["POST"])
+    def test_hubspot_connection():
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        try:
+            build_hubspot_client(db).test_connection()
+        except HubSpotError as exc:
+            db.set_setting(HUBSPOT_LAST_TEST_STATUS_SETTING, "error")
+            db.set_setting(HUBSPOT_LAST_TEST_AT_SETTING, utc_now())
+            status_code = exc.status_code if exc.status_code in {400, 401, 403, 429} else 503
+            return jsonify({
+                "status": "error", "category": exc.category, "message": str(exc),
+            }), status_code
+        db.set_setting(HUBSPOT_LAST_TEST_STATUS_SETTING, "connected")
+        db.set_setting(HUBSPOT_LAST_TEST_AT_SETTING, utc_now())
+        return jsonify({
+            "status": "connected", "message": translate(g.language, "hubspot_connected"),
+            "tested_at": db.get_setting(HUBSPOT_LAST_TEST_AT_SETTING),
+        })
+
+    @app.route("/api/integrations/hubspot/check", methods=["POST"])
+    def check_hubspot():
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        if not hubspot_access_token(db):
+            return jsonify({
+                "error": "not_configured",
+                "message": translate(g.language, "hubspot_not_configured_message"),
+            }), 409
+        payload = request.get_json(silent=True) or {}
+        raw_ids = payload.get("company_ids", [])
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        company_ids: list[int] = []
+        for value in raw_ids[:500]:
+            try:
+                company_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if company_id > 0:
+                company_ids.append(company_id)
+        company_ids = sorted(set(company_ids))
+        if not company_ids:
+            return jsonify({"error": "no_selection", "message": translate(g.language, "flash_choose_companies")}), 400
+        try:
+            result = build_hubspot_service(db).check(company_ids)
+        except HubSpotError as exc:
+            status_code = exc.status_code if exc.status_code in {400, 401, 403, 429} else 503
+            return jsonify({"error": exc.category, "message": str(exc)}), status_code
+        return jsonify(result)
+
+    @app.route("/api/integrations/hubspot/sync", methods=["POST"])
+    def sync_hubspot():
+        if not valid_csrf():
+            abort(400)
+        db: Database = app.config["DATABASE"]
+        if not hubspot_access_token(db):
+            return jsonify({
+                "error": "not_configured",
+                "message": translate(g.language, "hubspot_not_configured_message"),
+            }), 409
+        payload = request.get_json(silent=True) or {}
+        try:
+            batch_id = int(payload.get("batch_id", 0))
+        except (TypeError, ValueError):
+            batch_id = 0
+        approvals = payload.get("approvals", [])
+        if batch_id < 1 or not isinstance(approvals, list) or not approvals:
+            return jsonify({"error": "invalid_request", "message": translate(g.language, "hubspot_invalid_sync_request")}), 400
+        try:
+            result = build_hubspot_service(db).sync(batch_id, approvals[:500])
+        except ValueError as exc:
+            return jsonify({"error": "invalid_preview", "message": str(exc)}), 400
+        except HubSpotError as exc:
+            status_code = exc.status_code if exc.status_code in {400, 401, 403, 429} else 503
+            return jsonify({"error": exc.category, "message": str(exc)}), status_code
+        return jsonify(result)
 
     @app.route("/settings/database/backup", methods=["POST"])
     def create_database_backup():

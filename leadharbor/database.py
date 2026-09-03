@@ -90,6 +90,12 @@ class Database:
                     email_status TEXT NOT NULL DEFAULT 'unchecked',
                     phone_status TEXT NOT NULL DEFAULT 'unchecked',
                     contact_notes TEXT NOT NULL DEFAULT '',
+                    hubspot_company_id TEXT NOT NULL DEFAULT '',
+                    hubspot_contact_id TEXT NOT NULL DEFAULT '',
+                    hubspot_sync_status TEXT NOT NULL DEFAULT 'UNCHECKED',
+                    hubspot_last_checked_at TEXT NOT NULL DEFAULT '',
+                    hubspot_last_synced_at TEXT NOT NULL DEFAULT '',
+                    hubspot_last_error TEXT NOT NULL DEFAULT '',
                     task_id INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -151,6 +157,45 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS hubspot_check_batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_count INTEGER NOT NULL DEFAULT 0,
+                    new_count INTEGER NOT NULL DEFAULT 0,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    enrichable_count INTEGER NOT NULL DEFAULT 0,
+                    conflict_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'ready',
+                    created_at TEXT NOT NULL,
+                    synced_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS hubspot_check_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id INTEGER NOT NULL,
+                    company_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    match_reason TEXT NOT NULL DEFAULT '',
+                    match_confidence TEXT NOT NULL DEFAULT '',
+                    hubspot_company_id TEXT NOT NULL DEFAULT '',
+                    hubspot_contact_id TEXT NOT NULL DEFAULT '',
+                    hubspot_company_updated_at TEXT NOT NULL DEFAULT '',
+                    hubspot_contact_updated_at TEXT NOT NULL DEFAULT '',
+                    company_record_json TEXT NOT NULL DEFAULT '{}',
+                    contact_record_json TEXT NOT NULL DEFAULT '{}',
+                    company_differences_json TEXT NOT NULL DEFAULT '[]',
+                    contact_differences_json TEXT NOT NULL DEFAULT '[]',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    sync_status TEXT NOT NULL DEFAULT '',
+                    sync_action TEXT NOT NULL DEFAULT '',
+                    sync_error TEXT NOT NULL DEFAULT '',
+                    synced_at TEXT,
+                    UNIQUE(batch_id, company_id),
+                    FOREIGN KEY(batch_id) REFERENCES hubspot_check_batches(id) ON DELETE CASCADE,
+                    FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_hubspot_check_results_batch
+                ON hubspot_check_results(batch_id, id);
             """)
             existing_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()
@@ -166,6 +211,12 @@ class Database:
                 "email_status": "TEXT NOT NULL DEFAULT 'unchecked'",
                 "phone_status": "TEXT NOT NULL DEFAULT 'unchecked'",
                 "contact_notes": "TEXT NOT NULL DEFAULT ''",
+                "hubspot_company_id": "TEXT NOT NULL DEFAULT ''",
+                "hubspot_contact_id": "TEXT NOT NULL DEFAULT ''",
+                "hubspot_sync_status": "TEXT NOT NULL DEFAULT 'UNCHECKED'",
+                "hubspot_last_checked_at": "TEXT NOT NULL DEFAULT ''",
+                "hubspot_last_synced_at": "TEXT NOT NULL DEFAULT ''",
+                "hubspot_last_error": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in migrations.items():
                 if column not in existing_columns:
@@ -269,6 +320,140 @@ class Database:
                 )
             else:
                 conn.execute("DELETE FROM app_metadata WHERE key = ?", (key,))
+
+    def create_hubspot_check_batch(self, results: list[dict[str, Any]]) -> int:
+        """Persist a read-only HubSpot preview and update local check metadata."""
+        counts = {
+            "NEW": 0, "DUPLICATE": 0, "ENRICHABLE": 0,
+            "CONFLICT": 0, "FAILED": 0,
+        }
+        for result in results:
+            status = str(result.get("status", "FAILED"))
+            counts[status if status in counts else "FAILED"] += 1
+        checked_at = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute("""
+                INSERT INTO hubspot_check_batches (
+                    total_count, new_count, duplicate_count, enrichable_count,
+                    conflict_count, failed_count, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                len(results), counts["NEW"], counts["DUPLICATE"],
+                counts["ENRICHABLE"], counts["CONFLICT"], counts["FAILED"], checked_at,
+            ))
+            batch_id = int(cursor.lastrowid)
+            for result in results:
+                company_id = int(result["company_id"])
+                status = str(result.get("status", "FAILED"))
+                company_hubspot_id = str(result.get("hubspot_company_id", ""))
+                contact_hubspot_id = str(result.get("hubspot_contact_id", ""))
+                error = str(result.get("error", ""))[:1000]
+                conn.execute("""
+                    INSERT INTO hubspot_check_results (
+                        batch_id, company_id, status, match_reason, match_confidence,
+                        hubspot_company_id, hubspot_contact_id,
+                        hubspot_company_updated_at, hubspot_contact_updated_at,
+                        company_record_json, contact_record_json,
+                        company_differences_json, contact_differences_json, error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    batch_id, company_id, status,
+                    str(result.get("match_reason", "")),
+                    str(result.get("match_confidence", "")),
+                    company_hubspot_id, contact_hubspot_id,
+                    str(result.get("hubspot_company_updated_at", "")),
+                    str(result.get("hubspot_contact_updated_at", "")),
+                    json.dumps(result.get("company_record") or {}, separators=(",", ":")),
+                    json.dumps(result.get("contact_record") or {}, separators=(",", ":")),
+                    json.dumps(result.get("company_differences") or [], separators=(",", ":")),
+                    json.dumps(result.get("contact_differences") or [], separators=(",", ":")),
+                    error,
+                ))
+                conn.execute("""
+                    UPDATE companies SET
+                        hubspot_company_id = CASE WHEN ? != '' THEN ? ELSE hubspot_company_id END,
+                        hubspot_contact_id = CASE WHEN ? != '' THEN ? ELSE hubspot_contact_id END,
+                        hubspot_sync_status = ?, hubspot_last_checked_at = ?,
+                        hubspot_last_error = ?, updated_at = updated_at
+                    WHERE id = ?
+                """, (
+                    company_hubspot_id, company_hubspot_id,
+                    contact_hubspot_id, contact_hubspot_id,
+                    status, checked_at, error, company_id,
+                ))
+        return batch_id
+
+    def get_hubspot_check_batch(self, batch_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM hubspot_check_batches WHERE id = ?", (batch_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_hubspot_check_result(
+        self, batch_id: int, company_id: int,
+    ) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("""
+                SELECT * FROM hubspot_check_results
+                WHERE batch_id = ? AND company_id = ?
+            """, (batch_id, company_id)).fetchone()
+        return dict(row) if row else None
+
+    def list_hubspot_check_results(self, batch_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute("""
+                SELECT result.*, companies.name AS company_name
+                FROM hubspot_check_results AS result
+                JOIN companies ON companies.id = result.company_id
+                WHERE result.batch_id = ? ORDER BY result.id
+            """, (batch_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_hubspot_sync_result(
+        self,
+        company_id: int,
+        *,
+        status: str,
+        hubspot_company_id: str = "",
+        hubspot_contact_id: str = "",
+        error: str = "",
+        batch_id: int | None = None,
+        action: str = "",
+    ) -> None:
+        synced_at = utc_now() if status == "SYNCED" else ""
+        safe_error = (error or "")[:1000]
+        with self.connect() as conn:
+            conn.execute("""
+                UPDATE companies SET
+                    hubspot_company_id = CASE WHEN ? != '' THEN ? ELSE hubspot_company_id END,
+                    hubspot_contact_id = CASE WHEN ? != '' THEN ? ELSE hubspot_contact_id END,
+                    hubspot_sync_status = ?,
+                    hubspot_last_synced_at = CASE WHEN ? != '' THEN ? ELSE hubspot_last_synced_at END,
+                    hubspot_last_error = ?
+                WHERE id = ?
+            """, (
+                hubspot_company_id, hubspot_company_id,
+                hubspot_contact_id, hubspot_contact_id,
+                status, synced_at, synced_at, safe_error, company_id,
+            ))
+            if batch_id is not None:
+                conn.execute("""
+                    UPDATE hubspot_check_results SET sync_status = ?, sync_action = ?,
+                        sync_error = ?, synced_at = ?
+                    WHERE batch_id = ? AND company_id = ?
+                """, (
+                    status, action, safe_error, synced_at or utc_now(), batch_id, company_id,
+                ))
+                remaining = conn.execute("""
+                    SELECT COUNT(*) FROM hubspot_check_results
+                    WHERE batch_id = ? AND sync_status = ''
+                """, (batch_id,)).fetchone()[0]
+                if not remaining:
+                    conn.execute("""
+                        UPDATE hubspot_check_batches SET status = 'processed', synced_at = ?
+                        WHERE id = ?
+                    """, (utc_now(), batch_id))
 
     @staticmethod
     def _decode_scoring_weights(value: str) -> dict[str, int]:
@@ -855,6 +1040,40 @@ class Database:
                 else remove.get("current_lead_status") or "Unchecked"
             )
             merged["score"] = max(int(keep.get("score", 0)), int(remove.get("score", 0)))
+            company_ids = {
+                value for value in (keep.get("hubspot_company_id"), remove.get("hubspot_company_id"))
+                if value
+            }
+            contact_ids = {
+                value for value in (keep.get("hubspot_contact_id"), remove.get("hubspot_contact_id"))
+                if value
+            }
+            merged["hubspot_company_id"] = keep.get("hubspot_company_id") or remove.get("hubspot_company_id") or ""
+            merged["hubspot_contact_id"] = keep.get("hubspot_contact_id") or remove.get("hubspot_contact_id") or ""
+            merged["hubspot_sync_status"] = (
+                keep.get("hubspot_sync_status")
+                if keep.get("hubspot_sync_status") not in {"", "UNCHECKED"}
+                else remove.get("hubspot_sync_status") or "UNCHECKED"
+            )
+            merged["hubspot_last_checked_at"] = max(
+                keep.get("hubspot_last_checked_at") or "",
+                remove.get("hubspot_last_checked_at") or "",
+            )
+            merged["hubspot_last_synced_at"] = max(
+                keep.get("hubspot_last_synced_at") or "",
+                remove.get("hubspot_last_synced_at") or "",
+            )
+            hubspot_notes = merge_evidence_values(
+                keep.get("hubspot_last_error", ""), remove.get("hubspot_last_error", ""), " | ",
+            )
+            if len(company_ids) > 1 or len(contact_ids) > 1:
+                hubspot_notes = merge_evidence_values(
+                    hubspot_notes,
+                    "Merged local records reference different HubSpot records; review required.",
+                    " | ",
+                )
+                merged["hubspot_sync_status"] = "CONFLICT"
+            merged["hubspot_last_error"] = hubspot_notes
             assignments = ", ".join(f"{field} = ?" for field in merged)
             conn.execute(
                 f"UPDATE companies SET {assignments}, updated_at = ? WHERE id = ?",

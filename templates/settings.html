@@ -29,6 +29,32 @@
     </form>
   </article>
 
+  <article class="panel settings-card hubspot-settings-card" id="hubspot-integration" data-hubspot-settings data-test-url="{{ url_for('test_hubspot_connection') }}" data-csrf="{{ csrf_token }}" data-error-label="{{ t('hubspot_connection_error') }}" data-network-label="{{ t('hubspot_network_unavailable') }}">
+    <div class="settings-card-heading">
+      <div><span class="api-mark hubspot">HS</span><div><h2>{{ t('hubspot_integration') }}</h2><p>{{ t('hubspot_settings_help') }}</p></div></div>
+      <span class="api-status {% if hubspot_connection_status == 'connected' %}configured{% elif hubspot_connection_status == 'error' %}connection-error{% else %}{{ 'configured' if hubspot_configured else 'not-configured' }}{% endif %}" data-hubspot-connection-status>
+        {% if hubspot_connection_status == 'connected' %}{{ t('hubspot_connected') }}{% elif hubspot_connection_status == 'error' %}{{ t('hubspot_connection_error') }}{% elif hubspot_configured %}{{ t('configured') }}{% else %}{{ t('not_configured') }}{% endif %}
+      </span>
+    </div>
+    {% if hubspot_configured %}
+    <div class="configured-key"><span>{{ t('hubspot_credential') }}</span><strong>{{ hubspot_masked }}</strong>{% if hubspot_from_environment %}<small>{{ t('from_environment') }}</small>{% endif %}</div>
+    {% endif %}
+    <form method="post" class="task-form api-settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="settings_section" value="hubspot">
+      <label>{{ t('hubspot_credential') }}
+        <input name="hubspot_access_token" type="password" maxlength="1000" autocomplete="new-password" placeholder="{{ t('hubspot_token_placeholder') }}" {% if hubspot_from_environment %}disabled{% endif %}>
+        <small class="field-hint">{{ t('hubspot_token_local_hint') }}</small>
+      </label>
+      {% if hubspot_configured and not hubspot_from_environment %}<label class="check remove-key"><input type="checkbox" name="remove_hubspot_token"><span>{{ t('hubspot_remove_token') }}</span></label>{% endif %}
+      <div class="hubspot-setting-actions">
+        <button class="primary" type="submit" {% if hubspot_from_environment %}disabled{% endif %}>{{ t('save') }} <span>→</span></button>
+        <button class="hubspot-test-button" type="button" data-hubspot-test {% if not hubspot_configured %}disabled{% endif %}>{{ t('hubspot_test_connection') }}</button>
+      </div>
+      <p class="hubspot-test-result" data-hubspot-test-result>{% if hubspot_last_test_at %}{{ t('hubspot_last_test') }}: {{ hubspot_last_test_at }}{% endif %}</p>
+    </form>
+  </article>
+
   <article class="panel settings-card map-settings-card">
     <div class="settings-card-heading">
       <div><span class="api-mark osm">OSM</span><div><h2>OpenStreetMap</h2><p>{{ t('osm_description') }}</p></div></div>

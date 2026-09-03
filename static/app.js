@@ -152,3 +152,217 @@ document.querySelectorAll('[data-scoring-form]').forEach((form) => {
   inputs.forEach((input) => input.addEventListener('input', update));
   update();
 });
+
+document.querySelectorAll('[data-hubspot-settings]').forEach((card) => {
+  const button = card.querySelector('[data-hubspot-test]');
+  const status = card.querySelector('[data-hubspot-connection-status]');
+  const result = card.querySelector('[data-hubspot-test-result]');
+  if (!button || !status || !result) return;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    result.textContent = '…';
+    try {
+      const response = await fetch(card.dataset.testUrl, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': card.dataset.csrf },
+      });
+      const payload = await response.json();
+      result.textContent = payload.message || payload.category || 'Connection error';
+      status.textContent = payload.status === 'connected' ? payload.message : card.dataset.errorLabel;
+      status.classList.toggle('configured', payload.status === 'connected');
+      status.classList.toggle('connection-error', payload.status !== 'connected');
+    } catch (_) {
+      result.textContent = card.dataset.networkLabel;
+      status.classList.add('connection-error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+
+document.querySelectorAll('[data-hubspot-preview]').forEach((dialog) => {
+  const checkButton = document.querySelector('[data-hubspot-check]');
+  const resultsContainer = dialog.querySelector('[data-hubspot-results]');
+  const summaryContainer = dialog.querySelector('[data-hubspot-summary]');
+  const progress = dialog.querySelector('[data-hubspot-progress]');
+  const syncButton = dialog.querySelector('[data-hubspot-sync]');
+  const labels = {
+    NEW: dialog.dataset.labelNew,
+    DUPLICATE: dialog.dataset.labelDuplicate,
+    ENRICHABLE: dialog.dataset.labelEnrichable,
+    CONFLICT: dialog.dataset.labelConflict,
+    FAILED: dialog.dataset.labelFailed,
+    SYNCED: dialog.dataset.labelSynced,
+    RECHECK_REQUIRED: dialog.dataset.labelRecheckRequired,
+    SKIPPED: dialog.dataset.labelSkipped,
+  };
+  let current = null;
+
+  const openDialog = () => {
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  };
+  const closeDialog = () => {
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  };
+  dialog.querySelectorAll('[data-hubspot-close]').forEach((button) => button.addEventListener('click', closeDialog));
+
+  const appendText = (parent, tag, text, className = '') => {
+    const node = document.createElement(tag);
+    node.textContent = text || '—';
+    if (className) node.className = className;
+    parent.appendChild(node);
+    return node;
+  };
+
+  const renderDifferences = (card, differences, objectType) => {
+    if (!differences?.length) return;
+    const table = document.createElement('div');
+    table.className = 'hubspot-difference-table';
+    differences.forEach((difference) => {
+      const row = document.createElement('div');
+      row.className = `hubspot-difference ${difference.action.toLowerCase()}`;
+      appendText(row, 'strong', difference.field);
+      appendText(row, 'span', `${dialog.dataset.labelHubspot}: ${difference.hubspot_value || '—'}`);
+      appendText(row, 'span', `${dialog.dataset.labelLocal}: ${difference.leadharbor_value || '—'}`);
+      if (difference.action === 'CONFLICT') {
+        const select = document.createElement('select');
+        select.dataset.overwriteObject = objectType;
+        select.dataset.overwriteField = difference.field;
+        const keep = document.createElement('option');
+        keep.value = 'keep';
+        keep.textContent = dialog.dataset.labelKeep;
+        const overwrite = document.createElement('option');
+        overwrite.value = 'overwrite';
+        overwrite.textContent = dialog.dataset.labelOverwrite;
+        select.append(keep, overwrite);
+        row.appendChild(select);
+      } else {
+        appendText(row, 'em', difference.action === 'FILL_MISSING' ? dialog.dataset.labelFill : dialog.dataset.labelNoChange);
+      }
+      table.appendChild(row);
+    });
+    card.appendChild(table);
+  };
+
+  const render = (payload) => {
+    current = payload;
+    resultsContainer.replaceChildren();
+    summaryContainer.replaceChildren();
+    ['new', 'duplicate', 'enrichable', 'conflict', 'failed'].forEach((key) => {
+      const item = document.createElement('span');
+      appendText(item, 'strong', String(payload.summary[key] || 0));
+      appendText(item, 'small', labels[key.toUpperCase()]);
+      summaryContainer.appendChild(item);
+    });
+    payload.results.forEach((item) => {
+      const card = document.createElement('article');
+      card.className = `hubspot-preview-card ${item.status.toLowerCase()}`;
+      card.dataset.companyId = String(item.company_id);
+      const heading = document.createElement('header');
+      appendText(heading, 'h3', item.company_name);
+      appendText(heading, 'span', labels[item.status] || item.status, 'hubspot-status');
+      card.appendChild(heading);
+      if (item.match_reason) appendText(card, 'p', `${item.match_reason} · ${item.match_confidence}`);
+      if (item.error) appendText(card, 'p', item.error, 'hubspot-error');
+      if (item.status === 'NEW') {
+        const fields = Object.entries(item.company_properties || {}).map(([key, value]) => `${key}: ${value}`);
+        appendText(card, 'p', fields.join(' · '), 'hubspot-new-fields');
+      }
+      renderDifferences(card, item.company_differences, 'company');
+      renderDifferences(card, item.contact_differences, 'contact');
+      resultsContainer.appendChild(card);
+      const rowStatus = document.querySelector(`[data-company-hubspot-status="${item.company_id}"]`);
+      if (rowStatus) {
+        rowStatus.textContent = labels[item.status] || item.status;
+        rowStatus.className = `hubspot-status ${item.status.toLowerCase()}`;
+      }
+    });
+    syncButton.disabled = !payload.results.some((item) => ['NEW', 'ENRICHABLE'].includes(item.status) || (item.status === 'CONFLICT' && item.match_confidence === 'exact'));
+  };
+
+  checkButton?.addEventListener('click', async () => {
+    const ids = [...document.querySelectorAll('[data-company-select]:checked')].map((box) => Number(box.value));
+    if (!ids.length) return;
+    openDialog();
+    progress.textContent = dialog.dataset.labelChecking;
+    resultsContainer.replaceChildren();
+    summaryContainer.replaceChildren();
+    syncButton.disabled = true;
+    checkButton.disabled = true;
+    try {
+      const response = await fetch(checkButton.dataset.checkUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': dialog.dataset.csrf },
+        body: JSON.stringify({ company_ids: ids }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'HubSpot check failed');
+      progress.textContent = '';
+      render(payload);
+    } catch (error) {
+      progress.textContent = error.message;
+    } finally {
+      checkButton.disabled = false;
+    }
+  });
+
+  const approvalFor = (item) => {
+    const card = resultsContainer.querySelector(`[data-company-id="${item.company_id}"]`);
+    const companyOverwrite = [...(card?.querySelectorAll('[data-overwrite-object="company"]') || [])]
+      .filter((select) => select.value === 'overwrite').map((select) => select.dataset.overwriteField);
+    const contactOverwrite = [...(card?.querySelectorAll('[data-overwrite-object="contact"]') || [])]
+      .filter((select) => select.value === 'overwrite').map((select) => select.dataset.overwriteField);
+    if (item.status === 'CONFLICT' && item.match_confidence !== 'exact') return null;
+    if (['DUPLICATE', 'FAILED'].includes(item.status)) return null;
+    const actions = [];
+    if (item.hubspot_company_id) {
+      if (item.company_differences?.some((difference) => difference.action === 'FILL_MISSING') || companyOverwrite.length) actions.push('ENRICH_COMPANY');
+    } else actions.push('CREATE_COMPANY');
+    const hasContact = Object.keys(item.contact_properties || {}).length > 0;
+    if (hasContact) {
+      if (item.hubspot_contact_id) {
+        if (item.contact_differences?.some((difference) => difference.action === 'FILL_MISSING') || contactOverwrite.length) actions.push('ENRICH_CONTACT');
+      } else actions.push('CREATE_CONTACT');
+      actions.push('ASSOCIATE_CONTACT_COMPANY');
+    }
+    if (!actions.length) return null;
+    return {
+      company_id: item.company_id,
+      actions,
+      company_overwrite_fields: companyOverwrite,
+      contact_overwrite_fields: contactOverwrite,
+    };
+  };
+
+  syncButton?.addEventListener('click', async () => {
+    const approvals = (current?.results || []).map(approvalFor).filter(Boolean);
+    if (!approvals.length) {
+      progress.textContent = dialog.dataset.labelNoActions;
+      return;
+    }
+    syncButton.disabled = true;
+    progress.textContent = dialog.dataset.labelSyncing;
+    try {
+      const response = await fetch(checkButton.dataset.syncUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': dialog.dataset.csrf },
+        body: JSON.stringify({ batch_id: current.batch_id, approvals }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'HubSpot sync failed');
+      progress.textContent = `${dialog.dataset.labelSyncComplete} ${payload.summary.success}/${payload.results.length}`;
+      payload.results.forEach((item) => {
+        const rowStatus = document.querySelector(`[data-company-hubspot-status="${item.company_id}"]`);
+        if (rowStatus) {
+          rowStatus.textContent = labels[item.status] || item.status;
+          rowStatus.className = `hubspot-status ${item.status.toLowerCase()}`;
+        }
+      });
+    } catch (error) {
+      progress.textContent = error.message;
+      syncButton.disabled = false;
+    }
+  });
+});

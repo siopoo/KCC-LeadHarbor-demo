@@ -28,6 +28,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div><strong>{{ t('bulk_manage') }}</strong><span data-selected-count>{{ t('selected_count', count=0) }}</span></div>
   <button type="submit" formaction="{{ url_for('bulk_export_companies') }}" data-bulk-action disabled>{{ t('export_selected') }}</button>
+  <button class="hubspot-check-button" type="button" data-bulk-action data-hubspot-check data-check-url="{{ url_for('check_hubspot') }}" data-sync-url="{{ url_for('sync_hubspot') }}" disabled>{{ t('hubspot_check_selected') }}</button>
   <button class="danger" type="submit" formaction="{{ url_for('bulk_delete_companies') }}" data-bulk-action data-confirm="{{ t('confirm_bulk_delete') }}" disabled>{{ t('delete_selected') }}</button>
 </form>
 
@@ -36,7 +37,7 @@
 </div>
 <div class="table-wrap" data-table-scroll>
   <table class="output-table" id="company-output-table">
-    <thead><tr><th>{{ t('column_company') }}</th><th>{{ t('column_market') }}</th><th>{{ t('column_address') }}</th><th>{{ t('column_type') }}</th><th>{{ t('column_first_name') }}</th><th>{{ t('column_last_name') }}</th><th>{{ t('column_contact') }}</th><th>{{ t('column_phone') }}</th><th>{{ t('column_signal') }}</th><th class="scale-column">{{ t('column_scale') }}</th><th class="score-column">{{ t('column_score') }}</th><th>{{ t('column_actions') }}</th><th class="select-column"><input type="checkbox" data-select-all aria-label="{{ t('select_all') }}"></th></tr></thead>
+    <thead><tr><th>{{ t('column_company') }}</th><th>{{ t('column_market') }}</th><th>{{ t('column_address') }}</th><th>{{ t('column_type') }}</th><th>{{ t('column_first_name') }}</th><th>{{ t('column_last_name') }}</th><th>{{ t('column_contact') }}</th><th>{{ t('column_phone') }}</th><th>{{ t('column_signal') }}</th><th class="scale-column">{{ t('column_scale') }}</th><th class="score-column">{{ t('column_score') }}</th><th>{{ t('hubspot_column_status') }}</th><th>{{ t('column_actions') }}</th><th class="select-column"><input type="checkbox" data-select-all aria-label="{{ t('select_all') }}"></th></tr></thead>
     <tbody>
       {% for company in companies %}
       <tr>
@@ -51,6 +52,7 @@
         <td>{{ company.signal or '—' }}</td>
         <td class="scale-column">{{ company.scale or '—' }}</td>
         <td class="score-column"><span class="score {% if company.score >= 90 %}high{% elif company.score >= 55 %}medium{% endif %}">{{ company.score }}</span></td>
+        <td><span class="hubspot-status {{ company.hubspot_sync_status|lower }}" data-company-hubspot-status="{{ company.id }}">{{ hubspot_status_label(company.hubspot_sync_status) }}</span>{% if company.hubspot_last_checked_at %}<small class="hubspot-checked-at">{{ company.hubspot_last_checked_at }}</small>{% endif %}</td>
         <td class="row-actions">
           <div class="row-actions-inner">
             <a href="{{ url_for('edit_company', company_id=company.id) }}">{{ t('edit') }}</a>
@@ -63,7 +65,7 @@
         <td class="select-column"><input form="bulk-company-form" type="checkbox" name="company_ids" value="{{ company.id }}" data-company-select aria-label="{{ company.name }}"></td>
       </tr>
       <tr class="evidence-row">
-        <td colspan="13">
+        <td colspan="14">
           <details class="evidence-disclosure">
             <summary>
               <span class="evidence-icon">◎</span>
@@ -115,9 +117,39 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="13"><div class="empty"><p>{{ t('no_companies') }}</p></div></td></tr>
+      <tr><td colspan="14"><div class="empty"><p>{{ t('no_companies') }}</p></div></td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+
+<dialog class="hubspot-dialog" data-hubspot-preview data-csrf="{{ csrf_token }}"
+  data-label-new="{{ t('hubspot_status_new') }}"
+  data-label-duplicate="{{ t('hubspot_status_duplicate') }}"
+  data-label-enrichable="{{ t('hubspot_status_enrichable') }}"
+  data-label-conflict="{{ t('hubspot_status_conflict') }}"
+  data-label-failed="{{ t('hubspot_status_failed') }}"
+  data-label-synced="{{ t('hubspot_status_synced') }}"
+  data-label-recheck-required="{{ t('hubspot_status_recheck_required') }}"
+  data-label-skipped="{{ t('hubspot_status_skipped') }}"
+  data-label-hubspot="{{ t('hubspot_value') }}"
+  data-label-local="{{ t('leadharbor_value') }}"
+  data-label-action="{{ t('proposed_action') }}"
+  data-label-keep="{{ t('keep_hubspot') }}"
+  data-label-overwrite="{{ t('use_leadharbor') }}"
+  data-label-fill="{{ t('fill_missing') }}"
+  data-label-no-change="{{ t('no_change') }}"
+  data-label-checking="{{ t('hubspot_checking') }}"
+  data-label-syncing="{{ t('hubspot_syncing') }}"
+  data-label-no-actions="{{ t('hubspot_no_safe_actions') }}"
+  data-label-sync-complete="{{ t('hubspot_sync_complete') }}">
+  <div class="hubspot-dialog-header"><div><p class="eyebrow">HUBSPOT REVIEW</p><h2>{{ t('hubspot_preview_title') }}</h2><p>{{ t('hubspot_preview_help') }}</p></div><button type="button" data-hubspot-close aria-label="{{ t('cancel') }}">×</button></div>
+  <div class="hubspot-summary" data-hubspot-summary></div>
+  <p class="hubspot-progress" data-hubspot-progress></p>
+  <div class="hubspot-results" data-hubspot-results></div>
+  <div class="hubspot-dialog-actions">
+    <button type="button" class="cancel-button" data-hubspot-close>{{ t('cancel') }}</button>
+    <button type="button" class="primary" data-hubspot-sync>{{ t('hubspot_sync_approved') }} <span>→</span></button>
+  </div>
+</dialog>
 {% endblock %}
