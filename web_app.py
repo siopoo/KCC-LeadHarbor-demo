@@ -96,6 +96,9 @@ def company_with_evidence(
         contact_last_name=str(item.get("contact_last_name", "")),
         website=str(item.get("website", "")), email=str(item.get("email", "")),
         phone=str(item.get("phone", "")), address=str(item.get("address", "")),
+        contact_phone=str(item.get("contact_phone", "")),
+        job_title=str(item.get("job_title", "")), city=str(item.get("city", "")),
+        state=str(item.get("state", "")), employee_count=str(item.get("employee_count", "")),
         country=str(item.get("country", "")), category=str(item.get("category", "")),
         description=str(item.get("description", "")), source=str(item.get("source", "")),
         source_url=str(item.get("source_url", "")), signal=str(item.get("signal", "")),
@@ -192,7 +195,10 @@ def create_app(database_path: Path | None = None) -> Flask:
                 "market": "field_market", "company_type": "field_company_type",
                 "contact_first_name": "field_first_name", "contact_last_name": "field_last_name",
                 "email": "field_email", "phone": "field_phone", "website": "field_website",
-                "address": "field_address", "signal": "field_signal", "scale": "field_scale",
+                "contact_phone": "field_contact_phone", "job_title": "field_job_title",
+                "address": "field_address", "city": "field_city", "state": "field_state",
+                "country": "field_country", "employee_count": "field_employee_count",
+                "signal": "field_signal", "scale": "field_scale",
             }
             return t(keys.get(field, field))
 
@@ -243,6 +249,9 @@ def create_app(database_path: Path | None = None) -> Flask:
             "Contact Info", "Phone Number (if available)", "Signal", "Scale", "Score",
             "Score Breakdown", "Source", "Source URL", "Matched Keywords", "Updated At",
             "Email Status", "Phone Status", "Contact Notes",
+            "Company Name", "Website", "Domain", "Company Phone", "City", "State",
+            "Country", "Industry", "Employee Count", "Contact Email", "Contact Phone",
+            "Job Title",
         ]
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fields)
@@ -266,6 +275,13 @@ def create_app(database_path: Path | None = None) -> Flask:
                 "Email Status": row.get("email_status", "unchecked"),
                 "Phone Status": row.get("phone_status", "unchecked"),
                 "Contact Notes": row.get("contact_notes", ""),
+                "Company Name": row["name"], "Website": row["website"],
+                "Domain": domain_key(row["website"]), "Company Phone": row["phone"],
+                "City": row.get("city", ""), "State": row.get("state") or row["market"],
+                "Country": row.get("country", ""), "Industry": row["company_type"],
+                "Employee Count": row.get("employee_count", ""),
+                "Contact Email": row["email"], "Contact Phone": row.get("contact_phone", ""),
+                "Job Title": row.get("job_title", ""),
             })
         return Response(
             "\ufeff" + output.getvalue(),
@@ -290,7 +306,13 @@ def create_app(database_path: Path | None = None) -> Flask:
             website=normalize_url(request.form.get("website", "").strip()),
             email=request.form.get("email", "").strip(),
             phone=request.form.get("phone", "").strip(),
+            contact_phone=request.form.get("contact_phone", "").strip(),
+            job_title=request.form.get("job_title", "").strip(),
             address=request.form.get("address", "").strip(),
+            city=request.form.get("city", "").strip(),
+            state=request.form.get("state", "").strip() or request.form.get("market", "").strip(),
+            country=request.form.get("country", "").strip(),
+            employee_count=request.form.get("employee_count", "").strip(),
             signal=request.form.get("signal", "").strip(),
             scale=request.form.get("scale", "").strip(),
             source="Manual",

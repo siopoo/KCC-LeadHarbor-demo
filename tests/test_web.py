@@ -211,6 +211,8 @@ class WebAppTests(unittest.TestCase):
             "Phone Number (if available),Signal,Scale,Score"
         ))
         self.assertIn("Score Breakdown,Source,Source URL,Matched Keywords,Updated At", text)
+        self.assertIn("Company Name,Website,Domain,Company Phone,City,State,Country,Industry", text)
+        self.assertIn("Contact Email,Contact Phone,Job Title", text)
 
     def test_companies_page_uses_requested_output_columns(self) -> None:
         self.client.application.config["DATABASE"].create_company(Lead(

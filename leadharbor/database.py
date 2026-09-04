@@ -76,8 +76,13 @@ class Database:
                     website TEXT NOT NULL DEFAULT '',
                     email TEXT NOT NULL DEFAULT '',
                     phone TEXT NOT NULL DEFAULT '',
+                    contact_phone TEXT NOT NULL DEFAULT '',
+                    job_title TEXT NOT NULL DEFAULT '',
                     address TEXT NOT NULL DEFAULT '',
+                    city TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT '',
                     country TEXT NOT NULL DEFAULT '',
+                    employee_count TEXT NOT NULL DEFAULT '',
                     category TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
                     source TEXT NOT NULL DEFAULT '',
@@ -139,7 +144,13 @@ class Database:
                     website TEXT NOT NULL DEFAULT '',
                     email TEXT NOT NULL DEFAULT '',
                     phone TEXT NOT NULL DEFAULT '',
+                    contact_phone TEXT NOT NULL DEFAULT '',
+                    job_title TEXT NOT NULL DEFAULT '',
                     address TEXT NOT NULL DEFAULT '',
+                    city TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT '',
+                    country TEXT NOT NULL DEFAULT '',
+                    employee_count TEXT NOT NULL DEFAULT '',
                     signal TEXT NOT NULL DEFAULT '',
                     scale TEXT NOT NULL DEFAULT '',
                     score INTEGER NOT NULL DEFAULT 0,
@@ -211,6 +222,11 @@ class Database:
                 "email_status": "TEXT NOT NULL DEFAULT 'unchecked'",
                 "phone_status": "TEXT NOT NULL DEFAULT 'unchecked'",
                 "contact_notes": "TEXT NOT NULL DEFAULT ''",
+                "contact_phone": "TEXT NOT NULL DEFAULT ''",
+                "job_title": "TEXT NOT NULL DEFAULT ''",
+                "city": "TEXT NOT NULL DEFAULT ''",
+                "state": "TEXT NOT NULL DEFAULT ''",
+                "employee_count": "TEXT NOT NULL DEFAULT ''",
                 "hubspot_company_id": "TEXT NOT NULL DEFAULT ''",
                 "hubspot_contact_id": "TEXT NOT NULL DEFAULT ''",
                 "hubspot_sync_status": "TEXT NOT NULL DEFAULT 'UNCHECKED'",
@@ -221,6 +237,21 @@ class Database:
             for column, definition in migrations.items():
                 if column not in existing_columns:
                     conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {definition}")
+            import_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(database_import_rows)").fetchall()
+            }
+            for column, definition in {
+                "contact_phone": "TEXT NOT NULL DEFAULT ''",
+                "job_title": "TEXT NOT NULL DEFAULT ''",
+                "city": "TEXT NOT NULL DEFAULT ''",
+                "state": "TEXT NOT NULL DEFAULT ''",
+                "country": "TEXT NOT NULL DEFAULT ''",
+                "employee_count": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in import_columns:
+                    conn.execute(
+                        f"ALTER TABLE database_import_rows ADD COLUMN {column} {definition}"
+                    )
             task_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(crawl_tasks)").fetchall()
             }
@@ -238,6 +269,7 @@ class Database:
                 )
                 WHERE market = ''
             """)
+            conn.execute("UPDATE companies SET state = market WHERE state = '' AND market != ''")
             conn.execute("""
                 DELETE FROM companies
                 WHERE lower(trim(name)) = 'find a contractor'
@@ -697,14 +729,17 @@ class Database:
                 conn.execute("""
                     INSERT INTO database_import_rows (
                         batch_id, name, market, company_type, contact_first_name,
-                        contact_last_name, website, email, phone, address, signal,
+                        contact_last_name, website, email, phone, contact_phone,
+                        job_title, address, city, state, country, employee_count, signal,
                         scale, score, row_status, match_company_id, duplicate_reason,
                         missing_fields
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     batch_id, lead.name, lead.market, lead.company_type,
                     lead.contact_first_name, lead.contact_last_name, lead.website,
-                    lead.email, lead.phone, lead.address, lead.signal, lead.scale,
+                    lead.email, lead.phone, lead.contact_phone, lead.job_title,
+                    lead.address, lead.city, lead.state, lead.country, lead.employee_count,
+                    lead.signal, lead.scale,
                     lead.score, row["row_status"], row.get("match_company_id"),
                     row.get("duplicate_reason", ""), ",".join(row["missing_fields"]),
                 ))
@@ -738,7 +773,13 @@ class Database:
                     website = CASE WHEN website = '' THEN ? ELSE website END,
                     email = CASE WHEN email = '' THEN ? ELSE email END,
                     phone = CASE WHEN phone = '' THEN ? ELSE phone END,
+                    contact_phone = CASE WHEN contact_phone = '' THEN ? ELSE contact_phone END,
+                    job_title = CASE WHEN job_title = '' THEN ? ELSE job_title END,
                     address = CASE WHEN address = '' THEN ? ELSE address END,
+                    city = CASE WHEN city = '' THEN ? ELSE city END,
+                    state = CASE WHEN state = '' THEN ? ELSE state END,
+                    country = CASE WHEN country = '' THEN ? ELSE country END,
+                    employee_count = CASE WHEN employee_count = '' THEN ? ELSE employee_count END,
                     signal = CASE WHEN signal = '' THEN ? ELSE signal END,
                     scale = CASE WHEN scale = '' THEN ? ELSE scale END,
                     score = MAX(score, ?),
@@ -747,7 +788,9 @@ class Database:
             """, (
                 lead.market, lead.company_type, lead.contact_first_name,
                 lead.contact_last_name, lead.website, lead.email, lead.phone,
-                lead.address, lead.signal, lead.scale, lead.score, utc_now(), company_id,
+                lead.contact_phone, lead.job_title, lead.address, lead.city, lead.state,
+                lead.country, lead.employee_count, lead.signal, lead.scale, lead.score,
+                utc_now(), company_id,
             ))
             return cursor.rowcount == 1
 
@@ -763,6 +806,9 @@ class Database:
                 contact_first_name=row["contact_first_name"],
                 contact_last_name=row["contact_last_name"], website=row["website"],
                 email=row["email"], phone=row["phone"], address=row["address"],
+                contact_phone=row["contact_phone"], job_title=row["job_title"],
+                city=row["city"], state=row["state"], country=row["country"],
+                employee_count=row["employee_count"],
                 signal=row["signal"], scale=row["scale"], score=row["score"],
                 source=f"Original database import: {batch['filename']}",
             )
@@ -830,10 +876,11 @@ class Database:
                 conn.execute("""
                     INSERT INTO companies (
                         unique_key, name, market, company_type, contact_first_name, contact_last_name,
-                        website, email, phone, address, country, category, description, source,
+                        website, email, phone, contact_phone, job_title, address, city, state,
+                        country, employee_count, category, description, source,
                         source_url, signal, scale, current_lead_status, score, matched_keywords, task_id,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(unique_key) DO UPDATE SET
                         name = excluded.name,
                         market = CASE WHEN excluded.market != '' THEN excluded.market ELSE companies.market END,
@@ -843,8 +890,13 @@ class Database:
                         website = CASE WHEN excluded.website != '' THEN excluded.website ELSE companies.website END,
                         email = CASE WHEN excluded.email != '' THEN excluded.email ELSE companies.email END,
                         phone = CASE WHEN excluded.phone != '' THEN excluded.phone ELSE companies.phone END,
+                        contact_phone = CASE WHEN excluded.contact_phone != '' THEN excluded.contact_phone ELSE companies.contact_phone END,
+                        job_title = CASE WHEN excluded.job_title != '' THEN excluded.job_title ELSE companies.job_title END,
                         address = CASE WHEN excluded.address != '' THEN excluded.address ELSE companies.address END,
+                        city = CASE WHEN excluded.city != '' THEN excluded.city ELSE companies.city END,
+                        state = CASE WHEN excluded.state != '' THEN excluded.state ELSE companies.state END,
                         country = CASE WHEN excluded.country != '' THEN excluded.country ELSE companies.country END,
+                        employee_count = CASE WHEN excluded.employee_count != '' THEN excluded.employee_count ELSE companies.employee_count END,
                         category = CASE WHEN excluded.category != '' THEN excluded.category ELSE companies.category END,
                         description = CASE WHEN excluded.description != '' THEN excluded.description ELSE companies.description END,
                         source = excluded.source,
@@ -859,7 +911,9 @@ class Database:
                 """, (
                     unique_key, lead.name, lead.market, lead.company_type,
                     lead.contact_first_name, lead.contact_last_name, lead.website, lead.email,
-                    lead.phone, lead.address, lead.country, lead.category, lead.description,
+                    lead.phone, lead.contact_phone, lead.job_title, lead.address, lead.city,
+                    lead.state or lead.market, lead.country, lead.employee_count,
+                    lead.category, lead.description,
                     lead.source, lead.source_url, lead.signal, lead.scale,
                     lead.current_lead_status, lead.score, lead.matched_keywords, task_id, now, now,
                 ))
@@ -884,14 +938,17 @@ class Database:
                 cursor = conn.execute("""
                     INSERT INTO companies (
                         unique_key, name, market, company_type, contact_first_name, contact_last_name,
-                        website, email, phone, address, country, category, description, source,
+                        website, email, phone, contact_phone, job_title, address, city, state,
+                        country, employee_count, category, description, source,
                         source_url, signal, scale, current_lead_status, score, matched_keywords, task_id,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """, (
                     unique_key, lead.name, lead.market, lead.company_type,
                     lead.contact_first_name, lead.contact_last_name, lead.website, lead.email,
-                    lead.phone, lead.address, lead.country, lead.category, lead.description,
+                    lead.phone, lead.contact_phone, lead.job_title, lead.address, lead.city,
+                    lead.state or lead.market, lead.country, lead.employee_count,
+                    lead.category, lead.description,
                     lead.source or "Manual", lead.source_url, lead.signal, lead.scale,
                     lead.current_lead_status, lead.score, lead.matched_keywords, now, now,
                 ))
@@ -913,12 +970,16 @@ class Database:
                     UPDATE companies SET
                         unique_key = ?, name = ?, market = ?, company_type = ?,
                         contact_first_name = ?, contact_last_name = ?, website = ?, email = ?,
-                        phone = ?, address = ?, signal = ?, scale = ?, score = ?, updated_at = ?
+                        phone = ?, contact_phone = ?, job_title = ?, address = ?, city = ?,
+                        state = ?, country = ?, employee_count = ?, signal = ?, scale = ?,
+                        score = ?, updated_at = ?
                     WHERE id = ?
                 """, (
                     self._lead_key(lead), lead.name, lead.market, lead.company_type,
                     lead.contact_first_name, lead.contact_last_name, lead.website, lead.email,
-                    lead.phone, lead.address, lead.signal, lead.scale, lead.score, utc_now(), company_id,
+                    lead.phone, lead.contact_phone, lead.job_title, lead.address, lead.city,
+                    lead.state or lead.market, lead.country, lead.employee_count,
+                    lead.signal, lead.scale, lead.score, utc_now(), company_id,
                 ))
                 return cursor.rowcount == 1
         except sqlite3.IntegrityError as exc:
@@ -1013,14 +1074,15 @@ class Database:
             keep, remove = dict(keep_row), dict(remove_row)
             fill_fields = (
                 "market", "company_type", "contact_first_name", "contact_last_name", "website",
-                "address", "country", "category", "description", "signal", "scale", "task_id",
+                "job_title", "address", "city", "state", "country", "employee_count",
+                "category", "description", "signal", "scale", "task_id",
             )
             merged = {
                 field: keep.get(field) or remove.get(field) or "" for field in fill_fields
             }
             merged["task_id"] = keep.get("task_id") or remove.get("task_id") or None
             for field, separator in (
-                ("email", ", "), ("phone", ", "), ("source", " | "),
+                ("email", ", "), ("phone", ", "), ("contact_phone", ", "), ("source", " | "),
                 ("source_url", " | "), ("matched_keywords", ", "),
             ):
                 merged[field] = merge_evidence_values(

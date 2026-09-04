@@ -56,6 +56,10 @@ class HubSpotDatabaseTests(unittest.TestCase):
         self.assertEqual(company["name"], "Acme Builders")
         self.assertEqual(company["hubspot_company_id"], "")
         self.assertEqual(company["hubspot_sync_status"], "UNCHECKED")
+        self.assertEqual(company["contact_phone"], "")
+        self.assertEqual(company["city"], "")
+        self.assertEqual(company["state"], "Texas")
+        self.assertEqual(company["job_title"], "")
         conn = db.connect()
         try:
             tables = {row[0] for row in conn.execute(
@@ -127,6 +131,21 @@ class HubSpotDatabaseTests(unittest.TestCase):
         self.assertEqual(company["hubspot_company_id"], "company-created")
         self.assertEqual(company["hubspot_sync_status"], "FAILED")
         self.assertEqual(company["hubspot_last_error"], "Association failed")
+
+    def test_explicit_company_and_contact_fields_round_trip(self) -> None:
+        db = Database(self.path)
+        company_id = db.create_company(Lead(
+            name="Field Builder", market="Texas", phone="210-555-1000",
+            contact_phone="210-555-2000", job_title="Buyer", address="10 Main St",
+            city="Austin", state="TX", country="United States", employee_count="42",
+        ))
+        company = db.get_company(company_id)
+        self.assertEqual(company["phone"], "210-555-1000")
+        self.assertEqual(company["contact_phone"], "210-555-2000")
+        self.assertEqual(company["job_title"], "Buyer")
+        self.assertEqual(company["city"], "Austin")
+        self.assertEqual(company["state"], "TX")
+        self.assertEqual(company["employee_count"], "42")
 
     def test_local_duplicate_merge_preserves_hubspot_relationship(self) -> None:
         db = Database(self.path)

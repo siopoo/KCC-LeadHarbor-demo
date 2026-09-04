@@ -27,6 +27,20 @@ class DatabaseImportParserTests(unittest.TestCase):
         self.assertIn("phone", missing_fields(leads[0]))
         self.assertNotIn("email", missing_fields(leads[0]))
 
+    def test_new_contact_fields_are_distinct_and_legacy_phone_stays_company_phone(self) -> None:
+        payload = (
+            "Company,Market,Domain,Phone,Contact Phone,Contact Email,City,State,Job Title\n"
+            "ABC Construction,Texas,abc.example,210-555-1000,210-555-2000,sales@example.com,Austin,TX,Buyer\n"
+        ).encode()
+        lead = parse_database_file("contacts.csv", payload)[0]
+        self.assertEqual(lead.phone, "210-555-1000")
+        self.assertEqual(lead.website, "https://abc.example")
+        self.assertEqual(lead.contact_phone, "210-555-2000")
+        self.assertEqual(lead.email, "sales@example.com")
+        self.assertEqual(lead.city, "Austin")
+        self.assertEqual(lead.state, "TX")
+        self.assertEqual(lead.job_title, "Buyer")
+
     def test_rows_without_company_name_are_ignored(self) -> None:
         payload = b"Company,Market,Email\n,Texas,unknown@example.com\nValid Co,Texas,\n"
         leads = parse_database_file("database.csv", payload)

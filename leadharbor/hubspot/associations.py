@@ -10,10 +10,14 @@ class HubSpotAssociations:
         self.client = client
 
     def associate_contact_company(self, contact_id: str, company_id: str) -> None:
-        self.client.request(
-            "PUT",
-            f"/crm/v4/objects/contact/{contact_id}/associations/default/company/{company_id}",
-        )
+        try:
+            self.client.request(
+                "PUT",
+                f"/crm/v4/objects/contact/{contact_id}/associations/default/company/{company_id}",
+            )
+        except HubSpotError as exc:
+            if exc.category != "conflict":
+                raise
 
     def associate_many(
         self, items: list[tuple[str, str, str]],
@@ -29,7 +33,12 @@ class HubSpotAssociations:
                     ]},
                 )
             except HubSpotError as exc:
-                outcomes.update({key: {"error": str(exc)} for key, _, _ in group})
+                if exc.category == "conflict":
+                    outcomes.update({
+                        key: {"ok": True, "already_exists": True} for key, _, _ in group
+                    })
+                else:
+                    outcomes.update({key: {"error": str(exc)} for key, _, _ in group})
             else:
                 outcomes.update({key: {"ok": True} for key, _, _ in group})
         return outcomes

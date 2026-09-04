@@ -171,7 +171,7 @@ explicitly selects **Use LeadHarbor (overwrite)** for that field.
 ### Employee workflow
 
 1. Open **Settings → HubSpot Integration**.
-2. Enter the private-app access token and click **Save**.
+2. Enter a HubSpot Access Token or Service Key and click **Save**.
 3. Click **Test Connection** and confirm that the status is **Connected**.
 4. Open **Companies**, select the desired rows, and click **Check HubSpot**.
 5. Review the **New**, **Already in HubSpot**, **Can Enrich**, and **Needs
@@ -185,7 +185,7 @@ The token can instead be supplied before startup through the environment. It
 takes priority over the value saved in the local SQLite settings database:
 
 ```powershell
-$env:HUBSPOT_ACCESS_TOKEN="pat-your-private-app-token"
+$env:HUBSPOT_ACCESS_TOKEN="your-hubspot-bearer-credential"
 python web_app.py
 ```
 
@@ -193,7 +193,11 @@ The Settings page displays only a masked value such as
 `••••••••••••abcd`. Never put the real token in source control, screenshots,
 support messages, or log files.
 
-### Required HubSpot private-app scopes
+Both HubSpot Service Keys and Private App access tokens are sent as
+`Authorization: Bearer <credential>`; the existing environment variable name
+is retained for compatibility.
+
+### Required HubSpot scopes
 
 The implemented Company, Contact, Search, batch, and association operations
 require these object scopes:
@@ -205,7 +209,7 @@ require these object scopes:
 
 These optional scopes allow LeadHarbor to inspect portal property metadata and
 automatically use the supported `leadharbor_*` custom properties when they
-already exist:
+already exist, and validate the Industry enumeration before writing it:
 
 - `crm.schemas.companies.read`
 - `crm.schemas.contacts.read`
@@ -262,6 +266,13 @@ candidate. Contact matching priority is local HubSpot ID, optional integration
 ID, and exact normalized email. Phone or person name matches remain review
 candidates and are never automatic exact matches. A strong possible duplicate
 blocks automatic creation.
+
+Company email is never written. `phone` is the Company phone, while
+`contact_phone` is the only source for Contact phone. Email-only Contacts,
+including generic mailboxes such as `sales@` and `info@`, are valid and are
+associated with the matching Company without inventing a person name. Industry
+is omitted with a preview note when schema metadata is unavailable or the local
+classification cannot be mapped to an accepted option.
 
 Check snapshots and local records retain the HubSpot Company/Contact IDs,
 status, last check/sync timestamps, and last safe error. Before updating an

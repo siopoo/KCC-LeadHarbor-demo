@@ -5,6 +5,7 @@ import unittest
 
 import requests
 
+from leadharbor.hubspot.associations import HubSpotAssociations
 from leadharbor.hubspot.batch import batch_create, batch_read
 from leadharbor.hubspot.client import HubSpotClient, HubSpotError
 from leadharbor.hubspot.companies import HubSpotCompanies
@@ -103,6 +104,15 @@ class HubSpotDedupTests(unittest.TestCase):
             [{"id": "12", "properties": {"phone": "+1 512 555 0100", "firstname": "Ana", "lastname": "Diaz"}}],
         )
         self.assertEqual(possible.kind, "POSSIBLE_MATCH")
+
+    def test_contact_phone_matching_uses_contact_phone_not_company_phone(self) -> None:
+        candidate = [{"id": "12", "properties": {"phone": "+1 210 555 9999"}}]
+        self.assertEqual(match_contact(
+            {"phone": "210-555-9999", "contact_phone": ""}, candidate,
+        ).kind, "NO_MATCH")
+        self.assertEqual(match_contact(
+            {"phone": "512-555-0100", "contact_phone": "210-555-9999"}, candidate,
+        ).kind, "POSSIBLE_MATCH")
 
     def test_ambiguous_exact_identifiers_require_review(self) -> None:
         decision = match_contact(
@@ -258,6 +268,21 @@ class HubSpotClientTests(unittest.TestCase):
 
         self.assertEqual(current["updatedAt"], "new")
         self.assertEqual(len(session.requests), 3)
+
+    def test_schema_permission_is_optional_and_standard_properties_remain_available(self) -> None:
+        session = FakeSession([FakeResponse(403, {"message": "missing schema scope"})])
+        companies = HubSpotCompanies(HubSpotClient("secret", session=session, sleep=lambda _: None))
+        self.assertIn("name", companies.available_properties())
+        self.assertIn("industry", companies.available_properties())
+        self.assertIsNone(companies.industry_options())
+
+    def test_existing_default_association_conflict_is_success(self) -> None:
+        session = FakeSession([FakeResponse(409, {"message": "association already exists"})])
+        associations = HubSpotAssociations(
+            HubSpotClient("secret", session=session, sleep=lambda _: None),
+        )
+        outcome = associations.associate_many([("1", "contact-1", "company-1")])
+        self.assertEqual(outcome, {"1": {"ok": True, "already_exists": True}})
 
 
 if __name__ == "__main__":

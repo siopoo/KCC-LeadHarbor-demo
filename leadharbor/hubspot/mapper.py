@@ -11,12 +11,16 @@ COMPANY_PROPERTY_MAP = {
     "website": "website",
     "phone": "phone",
     "address": "address",
-    "market": "state",
+    "city": "city",
     "country": "country",
-    "company_type": "industry",
     "employee_count": "numberofemployees",
     "source": "leadharbor_source",
     "score": "leadharbor_score",
+}
+
+CONSTRUCTION_INDUSTRY_ALIASES = {
+    "construction", "contractor", "general contractor", "retail contractor",
+    "builder", "commercial builder", "remodeler",
 }
 
 CONTACT_PROPERTY_MAP = {
@@ -45,11 +49,19 @@ def _clean_properties(values: Mapping[str, object], available: Set[str]) -> dict
 
 def map_company_properties(
     company: Mapping[str, Any], *, available: Set[str], enriched_at: str = "",
+    industry_options: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     mapped: dict[str, object] = {}
     for local_name, hubspot_name in COMPANY_PROPERTY_MAP.items():
         mapped[hubspot_name] = company.get(local_name, "")
     mapped["domain"] = normalize_domain(str(company.get("website") or company.get("domain") or ""))
+    mapped["state"] = company.get("state") or company.get("market") or ""
+    raw_industry = str(company.get("industry") or company.get("company_type") or "").strip()
+    if raw_industry and industry_options:
+        normalized = raw_industry.casefold()
+        if normalized in CONSTRUCTION_INDUSTRY_ALIASES:
+            normalized = "construction"
+        mapped["industry"] = industry_options.get(normalized, "")
     mapped["leadharbor_company_id"] = company.get("id", "")
     mapped["leadharbor_last_enriched_at"] = enriched_at
     return _clean_properties(mapped, available)
@@ -68,7 +80,7 @@ def map_contact_properties(
         "firstname": first,
         "lastname": last,
         "jobtitle": company.get("job_title", ""),
-        "phone": company.get("phone", ""),
+        "phone": company.get("contact_phone", ""),
         "leadharbor_contact_id": company.get("id", ""),
         "leadharbor_source": company.get("source", ""),
         "leadharbor_last_enriched_at": enriched_at,

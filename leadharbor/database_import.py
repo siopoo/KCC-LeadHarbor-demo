@@ -15,14 +15,20 @@ from .net import normalize_url
 
 FIELD_ALIASES = {
     "name": {"company", "company name", "company_name", "name", "企业名称", "公司", "公司名称"},
-    "market": {"market", "location", "city", "市场", "地区", "城市"},
+    "market": {"market", "location", "市场", "地区"},
     "company_type": {"type", "company type", "company_type", "category", "类型", "企业类型"},
     "contact_first_name": {"contact first name", "first name", "contact_first_name", "联系人名", "名字"},
     "contact_last_name": {"contact last name", "last name", "contact_last_name", "联系人姓", "姓氏"},
-    "email": {"contact info", "email", "e-mail", "邮箱", "联系邮箱"},
+    "email": {"contact info", "contact email", "email", "e-mail", "邮箱", "联系邮箱"},
     "phone": {"phone number (if available)", "phone", "telephone", "tel", "电话", "电话号码"},
-    "website": {"website", "web site", "url", "官网", "网站"},
+    "contact_phone": {"contact_phone", "contact phone", "contact phone number", "联系人电话", "联系人手机号"},
+    "job_title": {"job_title", "job title", "title", "职位", "职务"},
+    "website": {"website", "web site", "url", "domain", "company domain name", "官网", "网站", "域名"},
     "address": {"address", "street address", "地址"},
+    "city": {"city", "城市"},
+    "state": {"state", "state/region", "region", "州", "州/地区"},
+    "country": {"country", "country/region", "国家", "国家/地区"},
+    "employee_count": {"employee_count", "employee count", "number of employees", "employees", "员工数", "员工人数"},
     "signal": {"signal", "business signal", "业务信号"},
     "scale": {"scale", "company scale", "规模", "企业规模"},
     "score": {"score", "rating", "评分", "分数"},
@@ -30,7 +36,8 @@ FIELD_ALIASES = {
 
 MISSING_FIELDS = (
     "market", "company_type", "contact_first_name", "contact_last_name",
-    "email", "phone", "website", "address", "signal", "scale",
+    "email", "phone", "contact_phone", "job_title", "website", "address",
+    "city", "state", "country", "employee_count", "signal", "scale",
 )
 
 
@@ -66,8 +73,14 @@ def _lead_from_row(row: dict[str, str]) -> Lead | None:
         contact_last_name=row.get("contact_last_name", ""),
         email=row.get("email", ""),
         phone=row.get("phone", ""),
+        contact_phone=row.get("contact_phone", ""),
+        job_title=row.get("job_title", ""),
         website=normalize_url(row.get("website", "")),
         address=row.get("address", ""),
+        city=row.get("city", ""),
+        state=row.get("state", "") or row.get("market", ""),
+        country=row.get("country", ""),
+        employee_count=row.get("employee_count", ""),
         signal=row.get("signal", ""),
         scale=row.get("scale", ""),
         score=score,

@@ -29,6 +29,20 @@ def _decision_for_exact(records: list[dict[str, Any]], reason: str) -> MatchDeci
     return MatchDecision("NO_MATCH")
 
 
+def _same_phone(left: str, right: str) -> bool:
+    normalized_left = normalize_phone(left)
+    normalized_right = normalize_phone(right)
+    if not normalized_left or not normalized_right:
+        return False
+    if normalized_left == normalized_right:
+        return True
+    # HubSpot may store North American numbers with or without country code.
+    return (
+        len(normalized_left) in {10, 11} and len(normalized_right) in {10, 11}
+        and normalized_left[-10:] == normalized_right[-10:]
+    )
+
+
 def match_company(
     local: Mapping[str, Any], candidates: Sequence[dict[str, Any]],
     linked_id: str = "", integration_id: str = "",
@@ -54,7 +68,7 @@ def match_company(
         if exact:
             return _decision_for_exact(exact, "domain")
     name = normalize_company_name(str(local.get("name", "")))
-    state = str(local.get("market") or local.get("state") or "").strip().casefold()
+    state = str(local.get("state") or local.get("market") or "").strip().casefold()
     possible = [
         record for record in records
         if name and normalize_company_name(str(_properties(record).get("name", ""))) == name
@@ -99,7 +113,7 @@ def match_contact(
         ]
         if exact:
             return _decision_for_exact(exact, "email")
-    phone = normalize_phone(str(local.get("phone", "")))
+    phone = normalize_phone(str(local.get("contact_phone", "")))
     first = str(local.get("contact_first_name") or local.get("firstname") or "").strip().casefold()
     last = str(local.get("contact_last_name") or local.get("lastname") or "").strip().casefold()
     possible: list[dict[str, Any]] = []
@@ -107,7 +121,7 @@ def match_contact(
     if phone:
         possible = [
             record for record in records
-            if normalize_phone(str(_properties(record).get("phone", ""))) == phone
+            if _same_phone(str(_properties(record).get("phone", "")), phone)
         ]
         reason = "phone"
     if not possible and first and last:

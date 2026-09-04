@@ -33,6 +33,7 @@ class HubSpotSyncService:
 
     def _check_one(
         self, company: dict[str, Any], company_available: set[str], contact_available: set[str],
+        industry_options: dict[str, str] | None,
     ) -> dict[str, Any]:
         company_candidates = self.companies.candidates(
             company, str(company.get("hubspot_company_id", "")),
@@ -43,7 +44,15 @@ class HubSpotSyncService:
             integration_id=str(company.get("id", "")),
         )
         company_record = company_match.record or {}
-        company_values = map_company_properties(company, available=company_available)
+        company_values = map_company_properties(
+            company, available=company_available, industry_options=industry_options,
+        )
+        raw_industry = str(company.get("industry") or company.get("company_type") or "").strip()
+        company_notes: list[str] = []
+        if raw_industry and "industry" not in company_values:
+            company_notes.append(
+                "Industry was skipped because it could not be verified as an accepted HubSpot option."
+            )
         company_differences = self._differences(company_record, company_values)
         company_conflicts = any(item["action"] == "CONFLICT" for item in company_differences)
         company_fills = any(item["action"] == "FILL_MISSING" for item in company_differences)
@@ -104,6 +113,7 @@ class HubSpotSyncService:
             "contact_properties": contact_values,
             "company_differences": company_differences,
             "contact_differences": contact_differences,
+            "company_notes": company_notes,
             "error": "",
         }
 
@@ -111,6 +121,8 @@ class HubSpotSyncService:
         rows = self.db.list_companies_by_ids(company_ids)
         company_available = self.companies.available_properties()
         contact_available = self.contacts.available_properties()
+        industry_options_reader = getattr(self.companies, "industry_options", None)
+        industry_options = industry_options_reader() if industry_options_reader else None
         company_links = [str(row.get("hubspot_company_id", "")) for row in rows if row.get("hubspot_company_id")]
         contact_links = [str(row.get("hubspot_contact_id", "")) for row in rows if row.get("hubspot_contact_id")]
         if company_links and hasattr(self.companies, "preload"):
@@ -120,7 +132,9 @@ class HubSpotSyncService:
         results: list[dict[str, Any]] = []
         for company in rows:
             try:
-                results.append(self._check_one(company, company_available, contact_available))
+                results.append(self._check_one(
+                    company, company_available, contact_available, industry_options,
+                ))
             except Exception as exc:
                 LOG.warning("HubSpot check failed for local company %s: %s", company["id"], exc)
                 results.append({
@@ -131,6 +145,7 @@ class HubSpotSyncService:
                     "company_record": {}, "contact_record": {},
                     "company_properties": {}, "contact_properties": {},
                     "company_differences": [], "contact_differences": [],
+                    "company_notes": [],
                     "error": str(exc)[:500],
                 })
         batch_id = self.db.create_hubspot_check_batch(results)
@@ -173,6 +188,8 @@ class HubSpotSyncService:
             raise ValueError("HubSpot check batch was not found")
         company_available = self.companies.available_properties()
         contact_available = self.contacts.available_properties()
+        industry_options_reader = getattr(self.companies, "industry_options", None)
+        industry_options = industry_options_reader() if industry_options_reader else None
         sync_timestamp = utc_now()
         plans: dict[str, dict[str, Any]] = {}
         immediate: list[dict[str, Any]] = []
@@ -255,6 +272,7 @@ class HubSpotSyncService:
                 "contact_id_remote": str(local.get("hubspot_contact_id") or snapshot["hubspot_contact_id"] or ""),
                 "company_properties": map_company_properties(
                     local, available=company_available, enriched_at=sync_timestamp,
+                    industry_options=industry_options,
                 ),
                 "contact_properties": map_contact_properties(
                     local, available=contact_available, enriched_at=sync_timestamp,

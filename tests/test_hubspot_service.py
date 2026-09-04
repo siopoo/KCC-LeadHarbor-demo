@@ -109,19 +109,54 @@ class HubSpotMapperTests(unittest.TestCase):
         self.assertNotIn("description", company)
         self.assertNotIn("leadharbor_source", company)
 
-    def test_contact_mapping_requires_real_person_data(self) -> None:
+    def test_contact_mapping_accepts_email_only_and_separates_company_phone(self) -> None:
         generic = map_contact_properties({
-            "email": "", "contact_first_name": "", "contact_last_name": "",
+            "email": "sales@example.com", "contact_first_name": "", "contact_last_name": "",
             "phone": "512-555-0100",
         }, available={"email", "firstname", "lastname", "phone"})
-        self.assertEqual(generic, {})
+        self.assertEqual(generic, {"email": "sales@example.com"})
         person = map_contact_properties({
             "id": 3, "email": " ANA@EXAMPLE.COM ", "contact_first_name": "Ana",
             "contact_last_name": "Diaz", "phone": "512-555-0100",
+            "contact_phone": "210-555-0199", "job_title": "Project Manager",
         }, available={"email", "firstname", "lastname", "phone", "leadharbor_contact_id"})
         self.assertEqual(person["email"], "ana@example.com")
         self.assertEqual(person["firstname"], "Ana")
         self.assertEqual(person["leadharbor_contact_id"], "3")
+        self.assertEqual(person["phone"], "210-555-0199")
+
+    def test_company_mapping_never_contains_contact_email_and_uses_explicit_location(self) -> None:
+        company = map_company_properties({
+            "name": "ABC Construction", "email": "info@example.com",
+            "phone": "210-555-1234", "address": "10 Main St",
+            "city": "San Antonio", "state": "TX", "market": "Texas",
+        }, available={"name", "email", "phone", "address", "city", "state"})
+        self.assertNotIn("email", company)
+        self.assertEqual(company["phone"], "210-555-1234")
+        self.assertEqual(company["city"], "San Antonio")
+        self.assertEqual(company["state"], "TX")
+
+    def test_generic_mailboxes_are_valid_contact_payloads_without_fake_names(self) -> None:
+        for email in ("sales@example.com", "info@example.com", "accountspayable@example.com"):
+            with self.subTest(email=email):
+                payload = map_contact_properties(
+                    {"email": email}, available={"email", "firstname", "lastname"},
+                )
+                self.assertEqual(payload, {"email": email})
+                self.assertNotIn("firstname", payload)
+                self.assertNotIn("lastname", payload)
+
+    def test_industry_is_mapped_only_to_confirmed_hubspot_option(self) -> None:
+        mapped = map_company_properties(
+            {"name": "Builder", "company_type": "General Contractor"},
+            available={"name", "industry"}, industry_options={"construction": "CONSTRUCTION"},
+        )
+        invalid = map_company_properties(
+            {"name": "Builder", "company_type": "Unrelated Custom Classification"},
+            available={"name", "industry"}, industry_options={"construction": "CONSTRUCTION"},
+        )
+        self.assertEqual(mapped["industry"], "CONSTRUCTION")
+        self.assertNotIn("industry", invalid)
 
 
 class HubSpotCheckServiceTests(unittest.TestCase):
@@ -232,6 +267,30 @@ class HubSpotCheckServiceTests(unittest.TestCase):
         self.assertEqual(len(companies.writes), 1)
         self.assertEqual(len(contacts.writes), 1)
 
+    def test_email_only_contact_is_created_and_associated_without_fake_name(self) -> None:
+        company_id = self._company(
+            "Generic Mailbox Builder", website="https://mailbox.example",
+            email="sales@mailbox.example", phone="210-555-1000",
+        )
+        companies = FakeObjectAPI()
+        contacts = FakeObjectAPI()
+        associations = FakeAssociations()
+        service = HubSpotSyncService(self.db, companies, contacts, associations)
+        checked = service.check([company_id])
+
+        result = service.sync(checked["batch_id"], [{
+            "company_id": company_id,
+            "actions": ["CREATE_COMPANY", "CREATE_CONTACT", "ASSOCIATE_CONTACT_COMPANY"],
+        }])
+
+        self.assertEqual(result["results"][0]["status"], "SYNCED")
+        contact_payload = contacts.writes[0][1][0][1]
+        self.assertEqual(contact_payload["email"], "sales@mailbox.example")
+        self.assertNotIn("firstname", contact_payload)
+        self.assertNotIn("lastname", contact_payload)
+        self.assertNotIn("phone", contact_payload)
+        self.assertEqual(len(associations.writes), 1)
+
     def test_sync_enriches_only_missing_fields(self) -> None:
         company_id = self._company(
             "Enrich Safe Builder", website="https://safe.example", phone="512-555-0199",
@@ -315,6 +374,25 @@ class HubSpotCheckServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"]["success"], 1)
         self.assertEqual(result["summary"]["failed"], 1)
 
+    def test_invalid_industry_is_omitted_and_does_not_fail_company_create(self) -> None:
+        company_id = self._company(
+            "Odd Classification", website="https://odd.example",
+            company_type="Unrelated Custom Classification",
+        )
+        companies = FakeObjectAPI()
+        companies.industry_options = lambda: {"construction": "CONSTRUCTION"}
+        service = HubSpotSyncService(self.db, companies, FakeObjectAPI(), FakeAssociations())
+        checked = service.check([company_id])
+        preview = checked["results"][0]
+        self.assertNotIn("industry", preview["company_properties"])
+        self.assertTrue(preview["company_notes"])
+
+        result = service.sync(checked["batch_id"], [{
+            "company_id": company_id, "actions": ["CREATE_COMPANY"],
+        }])
+        self.assertEqual(result["results"][0]["status"], "SYNCED")
+        self.assertNotIn("industry", companies.writes[0][1][0][1])
+
     def test_association_failure_preserves_created_company_and_contact_ids(self) -> None:
         company_id = self._company(
             "Association Builder", website="https://association.example",
@@ -343,7 +421,8 @@ class HubSpotCheckServiceTests(unittest.TestCase):
         company_id = self._company(
             "Contact Enrich Builder", website="https://contact-enrich.example",
             contact_first_name="Ana", contact_last_name="Diaz",
-            email="ana@contact-enrich.example", phone="512-555-0144",
+            email="ana@contact-enrich.example", phone="512-555-0100",
+            contact_phone="512-555-0144",
         )
         remote_company = {
             "id": "hs-company", "updatedAt": "company-v1",

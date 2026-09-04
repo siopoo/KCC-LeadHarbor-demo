@@ -154,6 +154,13 @@ class HubSpotWebTests(unittest.TestCase):
         self.assertIn(b"data-hubspot-check", page.data)
         self.assertIn(b"data-hubspot-preview", page.data)
         self.assertIn(b"hubspot-status", page.data)
+        self.assertIn(b'data-label-company-changes', page.data)
+        self.assertIn(b'data-label-contact-changes', page.data)
+
+    def test_settings_describes_both_supported_bearer_credentials(self) -> None:
+        page = self.client.get("/language/en?next=/settings", follow_redirects=True)
+        self.assertIn(b"Access Token / Service Key", page.data)
+        self.assertIn(b"Service Keys and Private App access tokens", page.data)
 
 
 if __name__ == "__main__":

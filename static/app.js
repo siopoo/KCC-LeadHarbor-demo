@@ -246,6 +246,26 @@ document.querySelectorAll('[data-hubspot-preview]').forEach((dialog) => {
     card.appendChild(table);
   };
 
+  const renderObjectSection = (card, title, properties, differences, objectType) => {
+    const section = document.createElement('section');
+    section.className = `hubspot-object-section hubspot-${objectType}-section`;
+    appendText(section, 'h4', title);
+    const entries = Object.entries(properties || {});
+    if (entries.length) {
+      const propertyList = document.createElement('div');
+      propertyList.className = 'hubspot-property-list';
+      entries.forEach(([field, value]) => {
+        const row = document.createElement('div');
+        appendText(row, 'strong', field);
+        appendText(row, 'span', value);
+        propertyList.appendChild(row);
+      });
+      section.appendChild(propertyList);
+    }
+    renderDifferences(section, differences, objectType);
+    card.appendChild(section);
+  };
+
   const render = (payload) => {
     current = payload;
     resultsContainer.replaceChildren();
@@ -266,12 +286,20 @@ document.querySelectorAll('[data-hubspot-preview]').forEach((dialog) => {
       card.appendChild(heading);
       if (item.match_reason) appendText(card, 'p', `${item.match_reason} · ${item.match_confidence}`);
       if (item.error) appendText(card, 'p', item.error, 'hubspot-error');
-      if (item.status === 'NEW') {
-        const fields = Object.entries(item.company_properties || {}).map(([key, value]) => `${key}: ${value}`);
-        appendText(card, 'p', fields.join(' · '), 'hubspot-new-fields');
+      renderObjectSection(
+        card, dialog.dataset.labelCompanyChanges,
+        item.status === 'NEW' ? item.company_properties : {}, item.company_differences, 'company',
+      );
+      if (Object.keys(item.contact_properties || {}).length || item.contact_differences?.length) {
+        renderObjectSection(
+          card, dialog.dataset.labelContactChanges,
+          item.status === 'NEW' ? item.contact_properties : {}, item.contact_differences, 'contact',
+        );
+        appendText(card, 'p', `${dialog.dataset.labelAssociatedCompany}: ${item.company_name}`, 'hubspot-association-preview');
       }
-      renderDifferences(card, item.company_differences, 'company');
-      renderDifferences(card, item.contact_differences, 'contact');
+      if (item.company_notes?.length) {
+        appendText(card, 'p', `${dialog.dataset.labelNotes}: ${item.company_notes.join(' ')}`, 'hubspot-preview-note');
+      }
       resultsContainer.appendChild(card);
       const rowStatus = document.querySelector(`[data-company-hubspot-status="${item.company_id}"]`);
       if (rowStatus) {

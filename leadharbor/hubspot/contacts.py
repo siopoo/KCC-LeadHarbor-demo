@@ -97,9 +97,9 @@ class HubSpotContacts:
         if email:
             for record in self.search("email", email):
                 records[str(record.get("id", ""))] = record
-        phone = normalize_phone(str(local.get("phone", "")))
+        phone = normalize_phone(str(local.get("contact_phone", "")))
         if phone:
-            for record in self.search("phone", str(local.get("phone", "")).strip()):
+            for record in self.search("phone", str(local.get("contact_phone", "")).strip()):
                 records[str(record.get("id", ""))] = record
         first = str(local.get("contact_first_name", "")).strip()
         last = str(local.get("contact_last_name", "")).strip()

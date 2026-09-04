@@ -17,6 +17,7 @@ class HubSpotCompanies:
     def __init__(self, client: HubSpotClient) -> None:
         self.client = client
         self._properties: set[str] | None = None
+        self._property_metadata: dict[str, dict[str, Any]] | None = None
         self._search_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._record_cache: dict[str, dict[str, Any]] = {}
 
@@ -29,13 +30,40 @@ class HubSpotCompanies:
         except HubSpotError as exc:
             if exc.category != "missing_permissions":
                 raise
+            self._property_metadata = None
         else:
+            self._property_metadata = {
+                str(item.get("name", "")): dict(item)
+                for item in payload.get("results", []) if item.get("name")
+            }
             properties.update(
                 str(item.get("name", "")) for item in payload.get("results", [])
                 if item.get("name")
             )
         self._properties = properties
         return set(properties)
+
+    def industry_options(self) -> dict[str, str] | None:
+        """Return case-insensitive HubSpot Industry labels/values to accepted values.
+
+        None means schema metadata was unavailable, so callers must omit Industry
+        rather than guess an enumeration value.
+        """
+        self.available_properties()
+        if self._property_metadata is None:
+            return None
+        metadata = self._property_metadata.get("industry")
+        if not metadata:
+            return {}
+        options: dict[str, str] = {}
+        for option in metadata.get("options", []):
+            value = str(option.get("value", "")).strip()
+            label = str(option.get("label", "")).strip()
+            if value:
+                options[value.casefold()] = value
+                if label:
+                    options[label.casefold()] = value
+        return options
 
     def _property_list(self) -> str:
         return ",".join(sorted(self.available_properties()))
